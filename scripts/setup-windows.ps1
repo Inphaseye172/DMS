@@ -115,6 +115,32 @@ else { Add-Result "Git" "FAIL" "install: winget install --id Git.Git -e"; $Fatal
 # Visual Studio with the C++ x64 toolset (via vswhere, which ships with every VS 2017+ installer).
 $vs = $null
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+# Report EVERY Visual Studio instance (incl. incomplete / Build Tools) and whether it has the C++ x64
+# tools, so it is obvious why an installed version is not used.
+function Get-VsInstances([string[]]$extra) {
+    $raw = Get-NativeOutput $vswhere (@("-all", "-products", "*", "-format", "json") + $extra)
+    $parsed = ($raw -join "`n") | ConvertFrom-Json  # PS 5.1 returns a JSON array as ONE object
+    return @($parsed | ForEach-Object { $_ })
+}
+if (Test-Path $vswhere) {
+    $allVs = Get-VsInstances @()
+    $withCpp = @((Get-VsInstances @("-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64")) | ForEach-Object { $_.instanceId })
+    foreach ($i in $allVs) {
+        $complete = (-not $i.PSObject.Properties["isComplete"]) -or $i.isComplete
+        $launch = (-not $i.PSObject.Properties["isLaunchable"]) -or $i.isLaunchable
+        $hasCpp = $withCpp -contains $i.instanceId
+        $state = @()
+        if ($hasCpp) { $state += "C++ x64 tools: yes" } else { $state += "C++ x64 tools: NO" }
+        if (-not $complete) { $state += "installation INCOMPLETE (reboot, or Visual Studio Installer > Repair/Resume)" }
+        if (-not $launch) { $state += "not launchable" }
+        Write-Host ("    found {0} {1} at {2} - {3}" -f $i.displayName, $i.installationVersion, $i.installationPath, ($state -join "; "))
+        if ($i.installationVersion -like "17.*" -and (-not $hasCpp -or -not $complete)) {
+            Add-Result "VS 2022 not usable" "WARN" ("$($i.displayName): " + $(if (-not $complete) { "installation incomplete - reboot or open Visual Studio Installer and choose Resume/Repair" }
+                else { "missing C++ tools - open Visual Studio Installer > Modify > tick 'Desktop development with C++' (and the 'MSVC v143 x64/x86' + 'Windows 11 SDK' components)" }))
+        }
+    }
+    if (-not $allVs.Count) { Write-Host "    vswhere found no Visual Studio instances" }
+}
 if (Test-Path $vswhere) {
     $json = Get-NativeOutput $vswhere @("-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-format", "json")
     # Windows PowerShell 5.1 emits a JSON array as ONE object: re-enumerate it explicitly.
