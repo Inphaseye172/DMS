@@ -81,8 +81,8 @@ public:
 private:
     std::unique_ptr<OrtRuntime> make_runtime();
     dms_status run_attempt(ComputeCtx& ctx, const Attempt& a, std::string& err);
-    dms_status run_pass(ComputeCtx& ctx, const Attempt& a, int crop_x0, int crop_y0, int crop_x1, int crop_y1, int iw, int ih,
-                        std::vector<float>& out_small, int& ow, int& oh, std::string& err);
+    dms_status run_pass(ComputeCtx& ctx, const Attempt& a, const struct FrameView& src, int crop_x0, int crop_y0, int crop_x1, int crop_y1,
+                        int iw, int ih, std::vector<float>& out_small, int& ow, int& oh, std::string& err);
     dms_status run_tiled(ComputeCtx& ctx, const Attempt& a, std::string& err);
     dms_status run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& err);
     bool oom_recent(const std::string& key);

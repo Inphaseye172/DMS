@@ -63,6 +63,26 @@ def nan_depth():
     save(helper.make_model(g, opset_imports=OPSET, producer_name="dms-tests"), "nan_depth.onnx")
 
 
+def normalizing():
+    # Per-input standardization (like relative depth models, each run has its own scale/shift):
+    # tiles inferred separately disagree by an affine transform unless aligned.
+    x = helper.make_tensor_value_info("image", TensorProto.FLOAT, ["batch_size", 3, "height", "width"])
+    y = helper.make_tensor_value_info("depth", TensorProto.FLOAT, ["batch_size", "height", "width"])
+    eps = helper.make_tensor("eps", TensorProto.FLOAT, [], [1e-6])
+    nodes = [
+        helper.make_node("ReduceMean", ["image"], ["m"], axes=[1], keepdims=0),
+        helper.make_node("ReduceMean", ["m"], ["mu"], axes=[1, 2], keepdims=1),
+        helper.make_node("Sub", ["m", "mu"], ["c"]),
+        helper.make_node("Mul", ["c", "c"], ["c2"]),
+        helper.make_node("ReduceMean", ["c2"], ["var"], axes=[1, 2], keepdims=1),
+        helper.make_node("Add", ["var", "eps"], ["ve"]),
+        helper.make_node("Sqrt", ["ve"], ["sd"]),
+        helper.make_node("Div", ["c", "sd"], ["depth"]),
+    ]
+    g = helper.make_graph(nodes, "synthetic_normalizing", [x], [y], initializer=[eps])
+    save(helper.make_model(g, opset_imports=OPSET, producer_name="dms-tests"), "synthetic_normalizing.onnx")
+
+
 def bad_rank():
     x = helper.make_tensor_value_info("v", TensorProto.FLOAT, ["n", 3])
     y = helper.make_tensor_value_info("o", TensorProto.FLOAT, ["n", 3])
@@ -74,4 +94,5 @@ if __name__ == "__main__":
     single()
     temporal()
     nan_depth()
+    normalizing()
     bad_rank()

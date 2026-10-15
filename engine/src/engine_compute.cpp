@@ -107,10 +107,9 @@ void Engine::note_oom(const std::string& key) {
     oom_memo_[key] = Clock::now();
 }
 
-dms_status Engine::run_pass(ComputeCtx& ctx, const Attempt& a, int x0, int y0, int x1, int y1, int iw, int ih, std::vector<float>& out_small,
-                            int& ow, int& oh, std::string& err) {
+dms_status Engine::run_pass(ComputeCtx& ctx, const Attempt& a, const FrameView& fv, int x0, int y0, int x1, int y1, int iw, int ih,
+                            std::vector<float>& out_small, int& ow, int& oh, std::string& err) {
     const dms_depth_request& req = *ctx.req;
-    const FrameView& fv = ctx.frames[static_cast<size_t>(ctx.center)];
     const Crop crop{x0, y0, x1, y1};
     const int n = ctx.samples;
     const int batch = a.parallel ? n : 1;
@@ -212,7 +211,9 @@ dms_status Engine::run_attempt(ComputeCtx& ctx, const Attempt& a, std::string& e
         ctx.units_done = 0;
         std::vector<float> small;
         int ow = 0, oh = 0;
-        const dms_status st = run_pass(ctx, a, 0, 0, ctx.w, ctx.h, iw, ih, small, ow, oh, err);
+        const FrameView& src = ctx.frames[static_cast<size_t>(ctx.center)];
+        inference_dims(src.width, src.height, a.res, ctx.spec.patch_multiple, iw, ih);
+        const dms_status st = run_pass(ctx, a, src, 0, 0, src.width, src.height, iw, ih, small, ow, oh, err);
         if (st != DMS_OK) return st;
         const auto t = Clock::now();
         ctx.depth.resize(pixel_count(ctx.w, ctx.h));
@@ -228,9 +229,115 @@ dms_status Engine::run_attempt(ComputeCtx& ctx, const Attempt& a, std::string& e
     }
 }
 
-dms_status Engine::run_tiled(ComputeCtx&, const Attempt&, std::string& err) {
-    err = "tiling not implemented yet";
-    return DMS_ERR_UNSUPPORTED;
+// Tiled inference (detail merge): a global low-resolution pass provides the low spatial frequencies
+// (overall depth layout, which a tile cannot know from its crop alone); every tile is inferred at the
+// attempt resolution, affinely aligned to the global pass over its area (relative depth models have a
+// per-run scale/shift), high-pass filtered, and only that detail is blended back with feathered weights
+// over the overlap. Low frequencies never come from tiles, so tile-to-tile layout differences cannot
+// produce seams.
+dms_status Engine::run_tiled(ComputeCtx& ctx, const Attempt& a, std::string& err) {
+    const FrameView& src = ctx.guide;  // tiles are cut from the full-resolution frame
+    const int W = src.width, H = src.height;
+    int g = static_cast<int>(std::lround(std::sqrt(static_cast<double>(a.tiles))));
+    const int patch = ctx.spec.patch_multiple > 0 ? ctx.spec.patch_multiple : 14;
+    // Tiles must stay meaningfully large; shrink the grid for small frames.
+    while (g > 1 && (W / g < 4 * patch || H / g < 4 * patch)) --g;
+    if (g <= 1) {
+        Attempt single = a;
+        single.tiles = 1;
+        return run_attempt(ctx, single, err);
+    }
+    const int batches_per_pass = a.parallel ? 1 : ctx.samples;
+    ctx.units_total = (g * g + 1) * batches_per_pass;
+    ctx.units_done = 0;
+    const size_t npx = pixel_count(ctx.w, ctx.h);
+
+    // 1) Global pass (low resolution reference).
+    std::vector<float> global(npx);
+    {
+        const FrameView& gsrc = ctx.frames[static_cast<size_t>(ctx.center)];
+        int iw = 0, ih = 0, ow = 0, oh = 0;
+        inference_dims(gsrc.width, gsrc.height, a.res, patch, iw, ih);
+        std::vector<float> small;
+        const dms_status st = run_pass(ctx, a, gsrc, 0, 0, gsrc.width, gsrc.height, iw, ih, small, ow, oh, err);
+        if (st != DMS_OK) return st;
+        resize_bilinear(small.data(), ow, oh, global.data(), ctx.w, ctx.h);
+    }
+
+    // 2) Tile layout with overlap = 32 px at tile inference resolution (converted to source pixels).
+    const int approx_tile = std::max((W + g - 1) / g, (H + g - 1) / g);
+    const int overlap = std::max(8, static_cast<int>(std::lround(32.0 * approx_tile / std::max(1, a.res))));
+    const int tw = std::min(W, (W + (g - 1) * overlap + g - 1) / g);
+    const int th = std::min(H, (H + (g - 1) * overlap + g - 1) / g);
+    auto origin = [g](int i, int total, int tile) { return g > 1 ? static_cast<int>(std::lround(static_cast<double>(i) * (total - tile) / (g - 1))) : 0; };
+    const float sx = static_cast<float>(ctx.w) / static_cast<float>(W);  // source -> output scale (normally 1)
+    const float sy = static_cast<float>(ctx.h) / static_cast<float>(H);
+    // Band split: structures larger than ~1/8 of a tile come from the global pass.
+    const int lp_radius = std::max(2, static_cast<int>(std::lround(std::min(static_cast<float>(tw) * sx, static_cast<float>(th) * sy) / 16.f)));
+    auto lowpass = [lp_radius](const float* in, float* out, int w, int h) {
+        std::vector<float> tmp(static_cast<size_t>(w) * static_cast<size_t>(h)), t2(tmp.size());
+        box_blur(in, out, tmp.data(), w, h, lp_radius);  // 3 box passes ~ Gaussian
+        box_blur(out, t2.data(), tmp.data(), w, h, lp_radius);
+        box_blur(t2.data(), out, tmp.data(), w, h, lp_radius);
+    };
+
+    std::vector<float> detail(npx, 0.f), wsum(npx, 0.f);
+    for (int ty = 0; ty < g; ++ty) {
+        for (int tx = 0; tx < g; ++tx) {
+            const int x0 = origin(tx, W, tw), y0 = origin(ty, H, th);
+            const int x1 = std::min(W, x0 + tw), y1 = std::min(H, y0 + th);
+            int iw = 0, ih = 0, ow = 0, oh = 0;
+            inference_dims(x1 - x0, y1 - y0, a.res, patch, iw, ih);
+            std::vector<float> small;
+            const dms_status st = run_pass(ctx, a, src, x0, y0, x1, y1, iw, ih, small, ow, oh, err);
+            if (st != DMS_OK) return st;
+            // Tile region in output coordinates.
+            const int ox0 = static_cast<int>(std::lround(static_cast<float>(x0) * sx));
+            const int oy0 = static_cast<int>(std::lround(static_cast<float>(y0) * sy));
+            const int ox1 = std::max(ox0 + 1, static_cast<int>(std::lround(static_cast<float>(x1) * sx)));
+            const int oy1 = std::max(oy0 + 1, static_cast<int>(std::lround(static_cast<float>(y1) * sy)));
+            const int rw = std::min(ox1, ctx.w) - ox0, rh = std::min(oy1, ctx.h) - oy0;
+            if (rw <= 0 || rh <= 0) continue;
+            std::vector<float> tile(static_cast<size_t>(rw) * static_cast<size_t>(rh));
+            resize_bilinear(small.data(), ow, oh, tile.data(), rw, rh);
+            // Align the tile to the global reference over the tile area (scales the detail correctly).
+            AffineAccumulator fit;
+            std::vector<float> gref(tile.size());
+            for (int y = 0; y < rh; ++y)
+                for (int x = 0; x < rw; ++x)
+                    gref[static_cast<size_t>(y) * static_cast<size_t>(rw) + static_cast<size_t>(x)] =
+                        global[static_cast<size_t>(oy0 + y) * static_cast<size_t>(ctx.w) + static_cast<size_t>(ox0 + x)];
+            fit.add(tile.data(), gref.data(), tile.size());
+            Affine af;
+            if (!fit.solve(af)) continue;  // featureless tile: contributes no detail
+            for (auto& v : tile) v = static_cast<float>(af.s * static_cast<double>(v) + af.b);
+            std::vector<float> tile_lp(tile.size());
+            lowpass(tile.data(), tile_lp.data(), rw, rh);
+            // Feathered weights: ramp over the overlap on interior edges only.
+            const float ovx = std::max(1.f, static_cast<float>(overlap) * sx), ovy = std::max(1.f, static_cast<float>(overlap) * sy);
+            for (int y = 0; y < rh; ++y) {
+                const float dy0 = ty == 0 ? 1e9f : static_cast<float>(y) + 0.5f;
+                const float dy1 = ty == g - 1 ? 1e9f : static_cast<float>(rh - y) - 0.5f;
+                const float wy = std::min(1.f, std::min(dy0, dy1) / ovy);
+                for (int x = 0; x < rw; ++x) {
+                    const float dx0 = tx == 0 ? 1e9f : static_cast<float>(x) + 0.5f;
+                    const float dx1 = tx == g - 1 ? 1e9f : static_cast<float>(rw - x) - 0.5f;
+                    const float wx = std::min(1.f, std::min(dx0, dx1) / ovx);
+                    const float wgt = std::max(1e-4f, wx * wy);
+                    const size_t ti = static_cast<size_t>(y) * static_cast<size_t>(rw) + static_cast<size_t>(x);
+                    const size_t o = static_cast<size_t>(oy0 + y) * static_cast<size_t>(ctx.w) + static_cast<size_t>(ox0 + x);
+                    detail[o] += wgt * (tile[ti] - tile_lp[ti]);
+                    wsum[o] += wgt;
+                }
+            }
+        }
+    }
+    // 3) Merge: low band from the global pass + blended high band from the tiles.
+    std::vector<float> global_lp(npx);
+    lowpass(global.data(), global_lp.data(), ctx.w, ctx.h);
+    ctx.depth.resize(npx);
+    for (size_t i = 0; i < npx; ++i) ctx.depth[i] = wsum[i] > 0.f ? global_lp[i] + detail[i] / wsum[i] : global[i];
+    return DMS_OK;
 }
 
 dms_status Engine::run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& err) {
