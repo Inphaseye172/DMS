@@ -18,6 +18,8 @@
   Do not fetch the DirectML build.
 .PARAMETER WithTensorRT
   Also copy onnxruntime_providers_tensorrt.dll (TensorRT itself must be installed separately).
+.PARAMETER Force
+  Re-verify and re-extract even if DestDir is already up to date.
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\fetch-deps.ps1
 #>
@@ -26,7 +28,8 @@ param(
     [string]$DestDir = (Join-Path $PSScriptRoot "..\build\DMS_deps"),
     [switch]$SkipCuda,
     [switch]$SkipDirectML,
-    [switch]$WithTensorRT
+    [switch]$WithTensorRT,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,11 +66,52 @@ $Artifacts = @{
                    "06e9b0026f3bad97d2b58666330fabec04fe1672f776661ecb0ce0029c27f142")
 }
 
+# ---- fast path: an earlier run completed with exactly these pinned artifacts -------------------
+# The stamp is deleted before any extraction and written only after everything succeeded, so an
+# interrupted run (Ctrl+C) always redoes the work instead of trusting half-written files.
+$selected = @()
+if (-not $SkipCuda) { $selected += @("ort-gpu", "cudart", "cublas", "cufft", "cudnn") }
+if (-not $SkipDirectML) { $selected += @("ort-dml", "directml") }
+$stampFile = Join-Path $DestDir ".dms_deps_stamp"
+$stamp = (($selected | Sort-Object | ForEach-Object { "$_=$($Artifacts[$_][2])" }) + "tensorrt=$([bool]$WithTensorRT)") -join "`n"
+$keyFiles = @()
+if (-not $SkipCuda) {
+    $keyFiles += @("onnxruntime.dll", "onnxruntime_providers_shared.dll", "onnxruntime_providers_cuda.dll", "cudart64_12.dll", "cublas64_12.dll",
+                   "cublasLt64_12.dll", "cufft64_11.dll", "cudnn64_9.dll") | ForEach-Object { Join-Path (Join-Path $DestDir "ort-cuda") $_ }
+}
+if (-not $SkipDirectML) {
+    $keyFiles += @("onnxruntime.dll", "DirectML.dll") | ForEach-Object { Join-Path (Join-Path $DestDir "ort-dml") $_ }
+}
+# Stamp layout: the artifact lines above, a "---" line, then "relative\path|size" for every extracted file.
+function Test-Stamp {
+    if ($Force -or -not (Test-Path $stampFile)) { return $false }
+    $parts = (Get-Content $stampFile -Raw) -split "`n---`n", 2
+    if ($parts.Count -ne 2 -or $parts[0].Trim() -ne $stamp.Trim()) { return $false }
+    foreach ($k in $keyFiles) { if (-not (Test-Path $k)) { return $false } }
+    foreach ($line in ($parts[1] -split "`n")) {
+        if (-not $line.Trim()) { continue }
+        $rel, $len = $line.Trim() -split "\|", 2
+        $f = Join-Path $DestDir $rel
+        if (-not (Test-Path $f) -or (Get-Item $f).Length -ne [int64]$len) { return $false }
+    }
+    return $true
+}
+if (Test-Stamp) {
+    Write-Host "Dependencies already up to date in $DestDir (use -Force to re-verify)."
+    return
+}
+Remove-Item -Force $stampFile -ErrorAction SilentlyContinue
+
+$Resolved = @{}
+$Written = New-Object System.Collections.ArrayList   # "relative\path|size" of every file this run placed
 function Get-Artifact([string]$key) {
+    if ($Resolved.ContainsKey($key)) { return $Resolved[$key] }
     $name, $url, $sha = $Artifacts[$key]
     $path = Join-Path $Cache $name
     if (Test-Path $path) {
-        if ((Get-FileHash -Algorithm SHA256 $path).Hash.ToLower() -eq $sha) { return $path }
+        $mb = [math]::Round((Get-Item $path).Length / 1MB)
+        Write-Host "Verifying cached $name ($mb MB) ..."
+        if ((Get-FileHash -Algorithm SHA256 $path).Hash.ToLower() -eq $sha) { $Resolved[$key] = $path; return $path }
         Write-Warning "$name in cache has a wrong hash; re-downloading"
         Remove-Item $path -Force
     }
@@ -88,21 +132,30 @@ function Get-Artifact([string]$key) {
         throw "SHA-256 mismatch for $name`n  expected $sha`n  got      $got"
     }
     Move-Item $tmp $path -Force
+    $Resolved[$key] = $path
     return $path
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Extracts entries whose full name matches $pattern (regex) into $dest, flattening directories.
+# Files already present with the right size are left alone; others are written to a temp file and
+# renamed, so an interrupted run never leaves a truncated DLL under its final name.
 function Expand-Matching([string]$archive, [string]$pattern, [string]$dest) {
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
     $n = 0
     try {
         foreach ($e in $zip.Entries) {
-            if ($e.FullName -match $pattern -and $e.Name) {
-                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, (Join-Path $dest $e.Name), $true)
-                $n++
-            }
+            if (-not ($e.FullName -match $pattern -and $e.Name)) { continue }
+            $n++
+            $target = Join-Path $dest $e.Name
+            $rel = $target.Substring($DestDir.Length).TrimStart([char]'\', [char]'/')
+            [void]$Written.Add(("{0}|{1}" -f $rel, $e.Length))
+            if ((Test-Path $target) -and (Get-Item $target).Length -eq $e.Length) { continue }
+            Write-Host ("  extracting {0} ({1} MB)" -f $e.Name, [math]::Round($e.Length / 1MB))
+            $tmp = "$target.tmp"
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $tmp, $true)
+            Move-Item -Force $tmp $target
         }
     } finally { $zip.Dispose() }
     if ($n -eq 0) { throw "No entries matching '$pattern' in $archive" }
@@ -132,4 +185,5 @@ $lic = Join-Path $DestDir "licenses"
 New-Item -ItemType Directory -Force -Path $lic | Out-Null
 if (-not $SkipCuda)     { Expand-Matching (Get-Artifact "ort-gpu") "/(LICENSE|ThirdPartyNotices\.txt)$" (Join-Path $lic "onnxruntime") }
 if (-not $SkipDirectML) { Expand-Matching (Get-Artifact "directml") "^LICENSE.*\.txt$" (Join-Path $lic "directml") }
+Set-Content -Path $stampFile -Value ($stamp + "`n---`n" + ($Written -join "`n")) -NoNewline
 Write-Host "Done. Dependencies in $DestDir"

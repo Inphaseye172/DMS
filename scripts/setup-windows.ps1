@@ -296,8 +296,12 @@ if ($Fatal) {
     if ($SkipDeps) {
         Add-Result "fetch-deps" "SKIP" "-SkipDeps"
     } else {
+        Write-Host "  First run: ~2.3 GB download + ~1.6 GB extraction (5-15 min, longer while antivirus scans the DLLs)."
+        Write-Host "  Later runs finish in about a second once build\DMS_deps is complete."
+        $t0 = Get-Date
         try {
             & (Join-Path $PSScriptRoot "fetch-deps.ps1") -DestDir $deps
+            Write-Host ("  fetch-deps took {0:N0} s" -f ((Get-Date) - $t0).TotalSeconds)
             Add-Result "fetch-deps" "OK" $deps
         } catch {
             Add-Result "fetch-deps" "FAIL" "$_"

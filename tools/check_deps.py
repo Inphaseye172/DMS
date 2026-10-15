@@ -30,8 +30,15 @@ def main(root):
         for f in sorted(os.listdir(d)):
             if not f.lower().endswith(".dll"):
                 continue
-            with open(os.path.join(d, f), "rb") as fh:
-                for kind, name in imports(fh.read()):
+            try:
+                with open(os.path.join(d, f), "rb") as fh:
+                    found = imports(fh.read())
+            except Exception as exc:  # truncated / corrupt file: report instead of crashing
+                print(f"UNREADABLE {backend}/{f}: not a valid PE file ({exc.__class__.__name__}); re-run fetch-deps.ps1 -Force")
+                bad += 1
+                continue
+            if True:
+                for kind, name in found:
                     n = name.lower()
                     if n in local or n in OS_DLLS or n.startswith(OS_PREFIXES) or n.startswith(VC_RUNTIME):
                         continue
