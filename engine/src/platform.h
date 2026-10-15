@@ -27,10 +27,12 @@ public:
     ~DynLib();
     DynLib(const DynLib&) = delete;
     DynLib& operator=(const DynLib&) = delete;
-    DynLib(DynLib&& o) noexcept : h_(o.h_), err_(std::move(o.err_)) { o.h_ = nullptr; }
+    DynLib(DynLib&& o) noexcept : h_(o.h_), err_(std::move(o.err_)), pinned_(o.pinned_) { o.h_ = nullptr; }
     DynLib& operator=(DynLib&& o) noexcept;
 
     bool ok() const noexcept { return h_ != nullptr; }
+    // Keeps the library loaded for the rest of the process (no FreeLibrary/dlclose on destruction).
+    void pin() noexcept { pinned_ = true; }
     const std::string& error() const noexcept { return err_; }
     void* symbol(const char* name) const noexcept;
     template <typename F>
@@ -39,6 +41,7 @@ public:
 private:
     void* h_ = nullptr;
     std::string err_;
+    bool pinned_ = false;
 };
 
 // Adds a directory to the DLL search path for subsequently loaded dependencies (Windows only; no-op elsewhere).

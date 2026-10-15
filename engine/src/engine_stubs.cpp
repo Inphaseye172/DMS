@@ -6,15 +6,6 @@ extern "C" {
 #define DMS_STUB(name, ...) \
     dms_status DMS_API name(__VA_ARGS__) { return DMS_ERR_UNSUPPORTED; }
 
-DMS_STUB(dms_model_count, dms_engine*, int32_t*)
-DMS_STUB(dms_model_info_at, dms_engine*, int32_t, dms_model_info*)
-DMS_STUB(dms_model_info_by_id, dms_engine*, const char*, dms_model_info*)
-DMS_STUB(dms_model_verify, dms_engine*, const char*)
-DMS_STUB(dms_model_reload_manifest, dms_engine*)
-DMS_STUB(dms_download_start, dms_engine*, const char*)
-DMS_STUB(dms_download_query, dms_engine*, const char*, dms_download_info*)
-DMS_STUB(dms_download_cancel, dms_engine*, const char*)
-DMS_STUB(dms_device_query, dms_engine*, dms_device_info*)
 DMS_STUB(dms_depth_cache_lookup, dms_engine*, const dms_cache_key*, const char*, int32_t, const dms_backend_settings*, float, float, dms_depth_result*)
 DMS_STUB(dms_cache_stats_query, dms_engine*, dms_cache_stats*)
 DMS_STUB(dms_cache_clear, dms_engine*)

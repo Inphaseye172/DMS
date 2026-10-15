@@ -140,13 +140,14 @@ DynLib& DynLib::operator=(DynLib&& o) noexcept {
         this->~DynLib();
         h_ = o.h_;
         err_ = std::move(o.err_);
+        pinned_ = o.pinned_;
         o.h_ = nullptr;
     }
     return *this;
 }
 
 DynLib::~DynLib() {
-    if (!h_) return;
+    if (!h_ || pinned_) return;
 #if defined(_WIN32)
     FreeLibrary(reinterpret_cast<HMODULE>(h_));
 #else

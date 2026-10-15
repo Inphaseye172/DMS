@@ -6,6 +6,7 @@
 #include "sha256.h"
 
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 
 #ifndef DMS_ENGINE_VERSION_STRING
@@ -47,16 +48,82 @@ EngineConfig resolve_config(const dms_engine_config* c) {
     return out;
 }
 
-Engine::Engine(EngineConfig cfg) : cfg_(std::move(cfg)) {
-    logger_ = std::make_unique<Logger>(cfg_.log_dir, cfg_.log_level);
-    set_global_logger(logger_.get());
+namespace {
+std::unique_ptr<Logger> make_logger(const EngineConfig& c) {
+    auto l = std::make_unique<Logger>(c.log_dir, c.log_level);
+    set_global_logger(l.get());
+    return l;
+}
+}  // namespace
+
+Engine::Engine(EngineConfig cfg)
+    : cfg_(std::move(cfg)), logger_(make_logger(cfg_)), manifest_(cfg_.models_dir), downloader_() {
+    inference_ = std::make_unique<InferenceService>([this] { return make_runtime(); }, 8, cfg_.offload_idle_ms);
     logf(DMS_LOG_INFO, "DMS engine %s starting; models=%s deps=%s", DMS_ENGINE_VERSION_STRING,
          platform::path_to_utf8(cfg_.models_dir).c_str(), platform::path_to_utf8(cfg_.deps_dir).c_str());
 }
 
 Engine::~Engine() {
     log(DMS_LOG_INFO, "DMS engine shutting down");
+    inference_.reset();  // stops the worker, destroys sessions, unloads ONNX Runtime
     set_global_logger(nullptr);
+}
+
+std::unique_ptr<OrtRuntime> Engine::make_runtime() {
+    std::string tried;
+    for (const auto& p : OrtRuntime::candidate_libs(cfg_.deps_dir, false, false)) {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(p, ec)) {
+            tried += "\n  " + platform::path_to_utf8(p) + " (missing)";
+            continue;
+        }
+        try {
+            return std::make_unique<OrtRuntime>(p);
+        } catch (const Error& e) {
+            tried += "\n  " + platform::path_to_utf8(p) + " (" + e.what() + ")";
+        }
+    }
+    fail(DMS_ERR_BACKEND_UNAVAILABLE, "ONNX Runtime could not be loaded; tried:" + tried);
+}
+
+void Engine::fill_model_info(const ModelSpec& m, dms_model_info& out) {
+    const uint32_t size = out.struct_size;
+    std::memset(&out, 0, sizeof(out) < size ? sizeof(out) : size);
+    out.struct_size = size;
+    copy_str(out.id, sizeof(out.id), m.id);
+    copy_str(out.display_name, sizeof(out.display_name), m.display_name);
+    out.kind = m.kind;
+    out.window_size = m.window;
+    out.patch_multiple = m.patch_multiple;
+    out.expected_bytes = m.size;
+    out.has_url = m.url.empty() ? 0 : 1;
+    const auto p = manifest_.path_for(m);
+    std::error_code ec;
+    out.installed = std::filesystem::is_regular_file(p, ec) && (!m.size || std::filesystem::file_size(p, ec) == m.size) ? 1 : 0;
+    {
+        std::lock_guard<std::mutex> lk(verified_mu_);
+        out.verified = verified_.count(m.id) ? 1 : 0;
+    }
+    copy_str(out.path, sizeof(out.path), platform::path_to_utf8(p));
+}
+
+void Engine::mark_verified(const std::string& id) {
+    std::lock_guard<std::mutex> lk(verified_mu_);
+    verified_.insert(id);
+}
+
+dms_status Engine::verify_model(const std::string& id) {
+    const auto spec = manifest_.find(id);
+    if (!spec) fail(DMS_ERR_NOT_FOUND, "unknown model " + id);
+    const auto p = manifest_.path_for(*spec);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(p, ec)) fail(DMS_ERR_MODEL_NOT_INSTALLED, spec->display_name + " is not installed");
+    if (spec->sha256.empty()) fail(DMS_ERR_UNSUPPORTED, "no checksum known for " + spec->display_name);
+    const std::string got = sha256_file(p);
+    if (got.empty()) fail(DMS_ERR_IO, "cannot read " + platform::path_to_utf8(p));
+    if (got != spec->sha256) fail(DMS_ERR_CHECKSUM, spec->display_name + ": checksum mismatch (file is corrupt; delete it and download again)");
+    mark_verified(id);
+    return DMS_OK;
 }
 
 std::shared_ptr<Engine> lock_engine(dms_engine* h) {
@@ -154,6 +221,108 @@ dms_status DMS_API dms_depth_compute(dms_engine* engine, const dms_depth_request
         check_struct(request, "dms_depth_request");
         check_struct(result, "dms_depth_result");
         return e->compute(*request, *result);
+    });
+}
+
+dms_status DMS_API dms_model_count(dms_engine* engine, int32_t* out_count) {
+    return guard("dms_model_count", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!out_count) fail(DMS_ERR_INVALID_ARG, "out_count is NULL");
+        *out_count = static_cast<int32_t>(e->manifest().count());
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_model_info_at(dms_engine* engine, int32_t index, dms_model_info* out_info) {
+    return guard("dms_model_info_at", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(out_info, "dms_model_info");
+        if (index < 0) fail(DMS_ERR_INVALID_ARG, "negative index");
+        const auto m = e->manifest().at(static_cast<size_t>(index));
+        if (!m) fail(DMS_ERR_NOT_FOUND, "model index out of range");
+        e->fill_model_info(*m, *out_info);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_model_info_by_id(dms_engine* engine, const char* model_id, dms_model_info* out_info) {
+    return guard("dms_model_info_by_id", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(out_info, "dms_model_info");
+        if (!model_id) fail(DMS_ERR_INVALID_ARG, "model_id is NULL");
+        const auto m = e->manifest().find(model_id);
+        if (!m) fail(DMS_ERR_NOT_FOUND, std::string("unknown model ") + model_id);
+        e->fill_model_info(*m, *out_info);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_model_verify(dms_engine* engine, const char* model_id) {
+    return guard("dms_model_verify", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!model_id) fail(DMS_ERR_INVALID_ARG, "model_id is NULL");
+        return e->verify_model(model_id);
+    });
+}
+
+dms_status DMS_API dms_model_reload_manifest(dms_engine* engine) {
+    return guard("dms_model_reload_manifest", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        e->manifest().reload();
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_download_start(dms_engine* engine, const char* model_id) {
+    return guard("dms_download_start", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!model_id) fail(DMS_ERR_INVALID_ARG, "model_id is NULL");
+        const auto m = e->manifest().find(model_id);
+        if (!m || m->custom_path) fail(DMS_ERR_NOT_FOUND, std::string("unknown model ") + model_id);
+        logf(DMS_LOG_INFO, "download requested: %s from %s", m->id.c_str(), m->url.c_str());
+        return e->downloader().start(*m, e->manifest().path_for(*m));
+    });
+}
+
+dms_status DMS_API dms_download_query(dms_engine* engine, const char* model_id, dms_download_info* out_info) {
+    return guard("dms_download_query", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(out_info, "dms_download_info");
+        if (!model_id) fail(DMS_ERR_INVALID_ARG, "model_id is NULL");
+        const auto st = e->downloader().status(model_id);
+        if (st.state == DMS_DL_DONE) e->mark_verified(model_id);  // SHA-256 checked by the downloader
+        out_info->state = st.state;
+        out_info->bytes_done = st.done;
+        out_info->bytes_total = st.total;
+        out_info->bytes_per_second = st.bytes_per_second;
+        copy_str(out_info->message, sizeof(out_info->message), st.message);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_download_cancel(dms_engine* engine, const char* model_id) {
+    return guard("dms_download_cancel", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!model_id) fail(DMS_ERR_INVALID_ARG, "model_id is NULL");
+        e->downloader().cancel(model_id);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_info) {
+    return guard("dms_device_query", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(out_info, "dms_device_info");
+        const uint32_t size = out_info->struct_size;
+        std::memset(out_info, 0, sizeof(*out_info));
+        out_info->struct_size = size;
+        const auto mem = platform::system_memory();
+        out_info->ram_total_bytes = mem.total;
+        out_info->ram_free_bytes = mem.available;
+        out_info->gpu_vendor = DMS_GPU_UNKNOWN;
+        out_info->active_backend = e->inference().last_backend();
+        copy_str(out_info->ort_version, sizeof(out_info->ort_version), e->inference().runtime_version());
+        return DMS_OK;
     });
 }
 

@@ -160,7 +160,7 @@ TEST_P(PixelDepthTest, RenderWritesExactlyTheOutputWorld) {
     ASSERT_TRUE(o.output_written) << o.message;
     EXPECT_TRUE(o.status == DMS_OK || o.status == DMS_ERR_DEGRADED) << o.message;
     EXPECT_TRUE(out.padding_intact());
-    float a, r, g, b;
+    float a = 0, r = 0, g = 0, b = 0;
     out.get(0, 0, a, r, g, b);
     EXPECT_NEAR(a, 1.f, 1e-3f);
     EXPECT_NEAR(r, g, 1e-6f);  // grayscale
@@ -175,7 +175,7 @@ TEST_P(PixelDepthTest, ZeroSizeInputYieldsTransparentOutput) {
     job.output = out.view;
     const auto o = render(eh.e, job);
     EXPECT_TRUE(o.output_written);
-    float a, r, g, b;
+    float a = 0, r = 0, g = 0, b = 0;
     out.get(3, 2, a, r, g, b);
     EXPECT_EQ(a, 0.f);
     EXPECT_TRUE(out.padding_intact());
@@ -195,7 +195,7 @@ TEST(PluginCore, OutputOutsideInputIsTransparent) {
     job.output_rect = {5, 5, 15, 15};  // half outside
     job.output = out.view;
     render(eh.e, job);
-    float a, r, g, b;
+    float a = 0, r = 0, g = 0, b = 0;
     out.get(9, 9, a, r, g, b);
     EXPECT_EQ(a, 0.f);
     out.get(0, 0, a, r, g, b);

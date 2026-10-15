@@ -7,10 +7,13 @@ function(dms_apply_warnings target)
     target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion -Wsign-conversion
-      -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual -Wnull-dereference
+      -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wunused -Woverloaded-virtual
       -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
       target_compile_options(${target} PRIVATE -Wduplicated-cond -Wlogical-op)
+    else()
+      # GCC 13 reports false positives for -Wnull-dereference inside libstdc++ at -O3; Clang does not.
+      target_compile_options(${target} PRIVATE -Wnull-dereference)
     endif()
   endif()
   if(DMS_ENABLE_ASAN AND NOT MSVC)

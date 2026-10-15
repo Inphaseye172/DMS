@@ -1,0 +1,2 @@
+// Generated from models_manifest.json by CMake. Do not edit.
+constexpr const char* kBuiltinManifest = R"__DMSJSON__(@DMS_MANIFEST_JSON@)__DMSJSON__";
