@@ -3,7 +3,7 @@
 ## Quick start (recommended)
 
 ```powershell
-git clone -b claude/ae-depth-map-plugin-5iubui https://github.com/inphaseye172/dms.git C:\src\dms
+git clone -b claude/ae-depth-map-plugin-5iubui https://github.com/Inphaseye172/DMS.git C:\src\dms
 cd C:\src\dms
 powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -AeSdk "C:\path\to\unzipped\AfterEffectsSDK" -Install
 ```
