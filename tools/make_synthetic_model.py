@@ -49,6 +49,20 @@ def temporal():
     save(helper.make_model(g, opset_imports=OPSET, producer_name="dms-tests"), "synthetic_temporal.onnx")
 
 
+def nan_depth():
+    # Same signature as synthetic_depth but produces NaN everywhere (simulates FP16 overflow).
+    x = helper.make_tensor_value_info("image", TensorProto.FLOAT, ["batch_size", 3, "height", "width"])
+    y = helper.make_tensor_value_info("depth", TensorProto.FLOAT, ["batch_size", "height", "width"])
+    zero = helper.make_tensor("zero", TensorProto.FLOAT, [], [0.0])
+    nodes = [
+        helper.make_node("ReduceMean", ["image"], ["m"], axes=[1], keepdims=0),
+        helper.make_node("Mul", ["m", "zero"], ["z"]),
+        helper.make_node("Div", ["z", "z"], ["depth"]),  # 0/0 = NaN
+    ]
+    g = helper.make_graph(nodes, "nan_depth", [x], [y], initializer=[zero])
+    save(helper.make_model(g, opset_imports=OPSET, producer_name="dms-tests"), "nan_depth.onnx")
+
+
 def bad_rank():
     x = helper.make_tensor_value_info("v", TensorProto.FLOAT, ["n", 3])
     y = helper.make_tensor_value_info("o", TensorProto.FLOAT, ["n", 3])
@@ -59,4 +73,5 @@ def bad_rank():
 if __name__ == "__main__":
     single()
     temporal()
+    nan_depth()
     bad_rank()

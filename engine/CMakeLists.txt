@@ -12,6 +12,8 @@ add_library(dms_engine STATIC
   src/ort_runtime.cpp
   src/inference_service.cpp
   src/pipeline.cpp
+  src/gpu_probe.cpp
+  src/backend_plan.cpp
 )
 
 # Built-in model manifest compiled into the engine.
@@ -26,7 +28,7 @@ if(DMS_ENABLE_TENSORRT)
   target_compile_definitions(dms_engine PRIVATE DMS_ENABLE_TENSORRT=1)
 endif()
 if(WIN32)
-  target_link_libraries(dms_engine PUBLIC winhttp shell32 ole32 psapi)
+  target_link_libraries(dms_engine PUBLIC winhttp shell32 ole32 psapi dxguid)
 else()
   find_package(Threads REQUIRED)
   target_link_libraries(dms_engine PUBLIC Threads::Threads ${CMAKE_DL_LIBS})

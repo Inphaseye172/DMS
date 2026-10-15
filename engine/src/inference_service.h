@@ -22,7 +22,57 @@
 
 namespace dms {
 
+// Reuses large float buffers across frames so the hot path does not allocate per frame.
+class BufferPool {
+public:
+    explicit BufferPool(size_t max_cached = 8) : max_cached_(max_cached) {}
+    std::vector<float> take(size_t n) {
+        std::lock_guard<std::mutex> lk(mu_);
+        for (size_t i = 0; i < free_.size(); ++i) {
+            if (free_[i].capacity() >= n) {
+                std::vector<float> v = std::move(free_[i]);
+                free_.erase(free_.begin() + static_cast<std::ptrdiff_t>(i));
+                v.resize(n);
+                ++hits_;
+                return v;
+            }
+        }
+        ++misses_;
+        return std::vector<float>(n);
+    }
+    void give(std::vector<float>&& v) {
+        if (v.capacity() == 0) return;
+        std::lock_guard<std::mutex> lk(mu_);
+        if (free_.size() >= max_cached_) free_.erase(free_.begin());  // drop the oldest
+        free_.push_back(std::move(v));
+    }
+    void clear() {
+        std::lock_guard<std::mutex> lk(mu_);
+        free_.clear();
+    }
+    uint64_t hits() const { std::lock_guard<std::mutex> lk(mu_); return hits_; }
+    uint64_t misses() const { std::lock_guard<std::mutex> lk(mu_); return misses_; }
+
+private:
+    mutable std::mutex mu_;
+    std::vector<std::vector<float>> free_;
+    size_t max_cached_;
+    uint64_t hits_ = 0, misses_ = 0;
+};
+
 struct InferenceJob {
+    InferenceJob() = default;
+    explicit InferenceJob(std::shared_ptr<BufferPool> p) : pool(std::move(p)) {}
+    ~InferenceJob() {
+        if (pool) {
+            pool->give(std::move(input));
+            pool->give(std::move(output));
+        }
+    }
+    InferenceJob(const InferenceJob&) = delete;
+    InferenceJob& operator=(const InferenceJob&) = delete;
+
+    std::shared_ptr<BufferPool> pool;
     SessionConfig cfg;
     int offload_mode = DMS_OFFLOAD_KEEP_VRAM;
     std::vector<float> input;
@@ -63,8 +113,11 @@ public:
     // Drops all cached sessions (and RAM copies) on the worker thread; waits up to timeout_ms.
     void release_sessions(uint32_t timeout_ms = 5000);
     size_t session_count() const;
+    bool has_session(const SessionConfig& cfg) const;
 
     void set_session_factory(SessionFactory f);
+    // Test hook: pretend the runtime exposes these providers.
+    void set_provider_override(std::vector<std::string> providers);
 
 private:
     struct CachedSession {
@@ -77,6 +130,7 @@ private:
     ModelSession& session_for(const InferenceJob& job, float& ms_create);
     void apply_offload_policy_locked_out();
     void evict_all_sessions();
+    void publish_sessions();
 
     RuntimeFactory runtime_factory_;
     SessionFactory session_factory_;
@@ -102,6 +156,7 @@ private:
     std::vector<std::pair<SessionConfig, CachedSession>> sessions_;
     std::map<std::string, std::shared_ptr<const std::vector<uint8_t>>> ram_models_;
     size_t session_count_snapshot_ = 0;
+    std::vector<SessionConfig> session_keys_snapshot_;  // guarded by mu_
     std::atomic<int> last_backend_{DMS_BACKEND_NONE};
 
     std::thread worker_;

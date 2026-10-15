@@ -69,9 +69,41 @@ Engine::~Engine() {
     set_global_logger(nullptr);
 }
 
+namespace {
+// The CUDA build of ORT is only worth loading when every CUDA dependency is present next to it.
+bool cuda_deps_present(const std::filesystem::path& deps, std::string& missing) {
+#if defined(_WIN32)
+    // NVIDIA DLLs live in the same folder as the CUDA build of ORT (see scripts/fetch-deps.ps1).
+    const auto d = deps / "ort-cuda";
+    const std::vector<std::filesystem::path> need = {d / "onnxruntime.dll", d / "onnxruntime_providers_cuda.dll", d / "cudart64_12.dll",
+                                                     d / "cublas64_12.dll", d / "cublasLt64_12.dll", d / "cufft64_11.dll", d / "cudnn64_9.dll"};
+#else
+    const std::vector<std::filesystem::path> need = {deps / "ort-cuda" / "libonnxruntime_providers_cuda.so"};
+#endif
+    std::error_code ec;
+    for (const auto& p : need) {
+        if (!std::filesystem::is_regular_file(p, ec)) {
+            missing = platform::path_to_utf8(p);
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 std::unique_ptr<OrtRuntime> Engine::make_runtime() {
     std::string tried;
-    for (const auto& p : OrtRuntime::candidate_libs(cfg_.deps_dir, false, false)) {
+    const GpuSnapshot gs = gpu().snapshot();
+    std::string missing;
+    const bool nvidia_ok = gs.vendor == DMS_GPU_NVIDIA && gs.driver.at_least(kMinCudaDriverMajor, kMinCudaDriverMinor);
+    const bool prefer_cuda = nvidia_ok && cuda_deps_present(cfg_.deps_dir, missing);
+    if (gs.vendor == DMS_GPU_NVIDIA && !nvidia_ok)
+        logf(DMS_LOG_WARN, "NVIDIA driver %s is older than %d.%02d required by CUDA 12 (cudaErrorInsufficientDriver); CUDA disabled",
+             gs.driver.str().c_str(), kMinCudaDriverMajor, kMinCudaDriverMinor);
+    else if (gs.vendor == DMS_GPU_NVIDIA && !prefer_cuda)
+        logf(DMS_LOG_WARN, "CUDA dependencies incomplete (missing %s); using DirectML/CPU", missing.c_str());
+    const bool prefer_dml = !prefer_cuda && gs.has_dxgi_adapter;
+    for (const auto& p : OrtRuntime::candidate_libs(cfg_.deps_dir, prefer_cuda, prefer_dml)) {
         std::error_code ec;
         if (!std::filesystem::is_regular_file(p, ec)) {
             tried += "\n  " + platform::path_to_utf8(p) + " (missing)";
@@ -319,9 +351,31 @@ dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_inf
         const auto mem = platform::system_memory();
         out_info->ram_total_bytes = mem.total;
         out_info->ram_free_bytes = mem.available;
-        out_info->gpu_vendor = DMS_GPU_UNKNOWN;
+        const GpuSnapshot gs = e->gpu().snapshot();
+        out_info->gpu_vendor = gs.vendor;
+        copy_str(out_info->gpu_name, sizeof(out_info->gpu_name), gs.name);
+        copy_str(out_info->driver_version, sizeof(out_info->driver_version), gs.driver.str());
+        out_info->vram_total_bytes = gs.vram_total;
+        out_info->vram_free_bytes = gs.vram_free;
         out_info->active_backend = e->inference().last_backend();
+        std::string notes = gs.notes;
+        // Loading the runtime here is cheap after the first time and never touches the network.
+        try {
+            e->inference().ensure_runtime();
+        } catch (const Error& ex) {
+            notes += std::string("ONNX Runtime: ") + ex.what() + " ";
+        }
         copy_str(out_info->ort_version, sizeof(out_info->ort_version), e->inference().runtime_version());
+        const bool driver_ok = gs.driver.at_least(kMinCudaDriverMajor, kMinCudaDriverMinor);
+        out_info->cuda_available = gs.vendor == DMS_GPU_NVIDIA && driver_ok && e->inference().runtime_has_provider("CUDAExecutionProvider");
+        out_info->directml_available = gs.has_dxgi_adapter && e->inference().runtime_has_provider("DmlExecutionProvider");
+#if defined(DMS_ENABLE_TENSORRT)
+        out_info->tensorrt_available = out_info->cuda_available && e->inference().runtime_has_provider("TensorrtExecutionProvider");
+#endif
+        if (gs.vendor == DMS_GPU_NVIDIA && !driver_ok) notes += "NVIDIA driver too old for CUDA 12. ";
+        if (gs.vendor == DMS_GPU_NVIDIA && !gs.driver.at_least(kMinMemShareDriverMajor, kMinMemShareDriverMinor))
+            notes += "CUDA Memory Sharing needs driver >= 560. ";
+        copy_str(out_info->notes, sizeof(out_info->notes), notes);
         return DMS_OK;
     });
 }

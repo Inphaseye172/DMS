@@ -41,6 +41,12 @@ void InferenceService::set_session_factory(SessionFactory f) {
     session_factory_ = std::move(f);
 }
 
+void InferenceService::set_provider_override(std::vector<std::string> providers) {
+    ensure_runtime();
+    std::lock_guard<std::mutex> lk(mu_);
+    providers_ = std::move(providers);
+}
+
 void InferenceService::ensure_runtime() {
     std::lock_guard<std::mutex> lk(runtime_mu_);
     if (runtime_) return;
@@ -66,6 +72,13 @@ bool InferenceService::runtime_has_provider(const std::string& name) const {
 size_t InferenceService::session_count() const {
     std::lock_guard<std::mutex> lk(mu_);
     return session_count_snapshot_;
+}
+
+bool InferenceService::has_session(const SessionConfig& cfg) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (const auto& k : session_keys_snapshot_)
+        if (k == cfg) return true;
+    return false;
 }
 
 dms_status InferenceService::execute(const std::shared_ptr<InferenceJob>& job, uint32_t timeout_ms, dms_abort_fn abort_fn, void* user) {
@@ -123,11 +136,18 @@ void InferenceService::release_sessions(uint32_t timeout_ms) {
     cv_done_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] { return !release_requested_ || stop_ || release_generation_ != gen; });
 }
 
+void InferenceService::publish_sessions() {
+    std::vector<SessionConfig> keys;
+    for (const auto& s : sessions_) keys.push_back(s.first);
+    std::lock_guard<std::mutex> lk(mu_);
+    session_count_snapshot_ = keys.size();
+    session_keys_snapshot_ = std::move(keys);
+}
+
 void InferenceService::evict_all_sessions() {
     sessions_.clear();
     ram_models_.clear();
-    std::lock_guard<std::mutex> lk(mu_);
-    session_count_snapshot_ = 0;
+    publish_sessions();
 }
 
 ModelSession& InferenceService::session_for(const InferenceJob& job, float& ms_create) {
@@ -168,6 +188,7 @@ ModelSession& InferenceService::session_for(const InferenceJob& job, float& ms_c
         // Memory pressure: drop every other cached session and retry once.
         logf(DMS_LOG_WARN, "session creation OOM; evicting %zu cached sessions and retrying", sessions_.size());
         sessions_.clear();
+        publish_sessions();
         s = factory(*runtime_, cfg);
     }
     ms_create = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -176,10 +197,7 @@ ModelSession& InferenceService::session_for(const InferenceJob& job, float& ms_c
     cs.last_used = std::chrono::steady_clock::now();
     cs.offload_mode = job.offload_mode;
     sessions_.emplace_back(job.cfg, std::move(cs));
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        session_count_snapshot_ = sessions_.size();
-    }
+    publish_sessions();
     return *sessions_.back().second.session;
 }
 
@@ -204,7 +222,8 @@ void InferenceService::run_job(InferenceJob& job) {
         size_t n = 1;
         for (int64_t d : job.out_shape) n *= static_cast<size_t>(d > 0 ? d : 1);
         if (n > out.size()) fail(DMS_ERR_INFERENCE_FAILED, "output shape larger than buffer");
-        job.output.assign(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(n));
+        job.output.resize(n);  // job.output usually comes from the buffer pool with enough capacity
+        std::copy(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(n), job.output.begin());
         job.status = DMS_OK;
         last_backend_ = static_cast<int>(job.cfg.backend);
     } catch (const Error& e) {
@@ -228,8 +247,7 @@ void InferenceService::run_job(InferenceJob& job) {
         // Free everything we hold so the next fallback step starts from a clean slate.
         logf(DMS_LOG_WARN, "OOM during inference (%s); releasing cached sessions", job.error.c_str());
         sessions_.clear();
-        std::lock_guard<std::mutex> lk(mu_);
-        session_count_snapshot_ = 0;
+        publish_sessions();
     }
 }
 
@@ -249,10 +267,7 @@ void InferenceService::apply_offload_policy_locked_out() {
             ++it;
         }
     }
-    if (changed) {
-        std::lock_guard<std::mutex> lk(mu_);
-        session_count_snapshot_ = sessions_.size();
-    }
+    if (changed) publish_sessions();
 }
 
 void InferenceService::worker_loop() {

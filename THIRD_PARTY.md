@@ -10,6 +10,7 @@ computed from the actual downloads on 2026-10-15.
 |---|---|---|---|---|
 | ONNX Runtime (CUDA build, Windows) | 1.22.0 | `onnxruntime-win-x64-gpu-1.22.0.zip` (GitHub release) | `5b5241716b2628c1ab5e79ee620be767531021149ee68f30fc46c16263fb94dd` | MIT |
 | ONNX Runtime (DirectML build, Windows) | 1.22.0 | `Microsoft.ML.OnnxRuntime.DirectML.1.22.0.nupkg` (GitHub release) | `b38d92c31d202d1dc772af9416fe30b6abae8527651e742c380c2d131e5f1817` | MIT |
+| DirectML redistributable (required by the ORT DirectML build, which delay-loads `DirectML.dll` >= 1.15) | 1.15.4 | `microsoft.ai.directml.1.15.4.nupkg` (api.nuget.org) | `4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9` | Microsoft DirectML license (redistributable) |
 | ONNX Runtime (CPU, Linux; dev/CI only) | 1.22.0 | `onnxruntime-linux-x64-1.22.0.tgz` (GitHub release) | `8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3` | MIT |
 | NVIDIA CUDA runtime | 12.9.79 | `nvidia_cuda_runtime_cu12-12.9.79-py3-none-win_amd64.whl` (PyPI) | `8e018af8fa02363876860388bd10ccb89eb9ab8fb0aa749aaf58430a9f7c4891` | NVIDIA EULA (redistributable) |
 | NVIDIA cuBLAS / cuBLASLt | 12.9.2.10 | `nvidia_cublas_cu12-12.9.2.10-py3-none-win_amd64.whl` (PyPI) | `623f43027d40d44ceadf0043f002bd25cf353e8f13ce90b9a87057019f560661` | NVIDIA EULA (redistributable) |
@@ -20,6 +21,11 @@ The NVIDIA DLL set was derived from the PE import table of `onnxruntime_provider
 `cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`, `cufft64_11.dll`, `cudnn64_9.dll`
 (plus the `cudnn_*64_9.dll` sub-libraries that cuDNN loads on demand). cuRAND is not imported and is
 not shipped. `nvml.dll` comes with the NVIDIA driver and is never redistributed.
+
+All NVIDIA DLLs are placed in the same folder as the CUDA build of ONNX Runtime (`DMS_deps/ort-cuda/`) and
+`DirectML.dll` next to the DirectML build (`DMS_deps/ort-dml/`). The engine pre-loads them by full path
+before ONNX Runtime needs them, so by-name resolution (delay loads, cuDNN sub-libraries) never picks up an
+older `DirectML.dll` from System32 or a different CUDA from `PATH`.
 
 ## Models (downloaded on first use, never bundled; checksums in `engine/src/models_manifest.json`)
 

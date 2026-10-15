@@ -2,12 +2,16 @@
 #pragma once
 
 #include "common.h"
+#include "backend_plan.h"
 #include "downloader.h"
+#include "gpu_probe.h"
 #include "inference_service.h"
 #include "logging.h"
 #include "manifest.h"
 
 #include <atomic>
+#include <chrono>
+#include <map>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -54,12 +58,27 @@ public:
     InferenceService& inference() noexcept { return *inference_; }
 
     dms_status compute(const dms_depth_request& req, dms_depth_result& res);
+    GpuMonitor& gpu();
+    BufferPool& pool() noexcept { return *pool_; }
+    std::shared_ptr<BufferPool> pool_ptr() noexcept { return pool_; }
+
+    // Test hooks.
+    void set_gpu_monitor(std::unique_ptr<GpuMonitor> m);
     void fill_model_info(const ModelSpec& m, dms_model_info& out);
     dms_status verify_model(const std::string& id);
     void mark_verified(const std::string& id);
 
+    struct ComputeCtx;  // defined in engine_compute.cpp
+
 private:
     std::unique_ptr<OrtRuntime> make_runtime();
+    dms_status run_attempt(ComputeCtx& ctx, const Attempt& a, std::string& err);
+    dms_status run_pass(ComputeCtx& ctx, const Attempt& a, int crop_x0, int crop_y0, int crop_x1, int crop_y1, int iw, int ih,
+                        std::vector<float>& out_small, int& ow, int& oh, std::string& err);
+    dms_status run_tiled(ComputeCtx& ctx, const Attempt& a, std::string& err);
+    dms_status run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& err);
+    bool oom_recent(const std::string& key);
+    void note_oom(const std::string& key);
 
     EngineConfig cfg_;
     std::unique_ptr<Logger> logger_;
@@ -68,6 +87,15 @@ private:
     std::unique_ptr<InferenceService> inference_;
     std::mutex verified_mu_;
     std::set<std::string> verified_;
+
+    std::mutex gpu_mu_;
+    std::unique_ptr<GpuMonitor> gpu_;  // created lazily (NVML/DXGI probe)
+    std::shared_ptr<BufferPool> pool_ = std::make_shared<BufferPool>(16);
+    std::atomic<bool> cuda_sticky_unavailable_{false};
+    std::atomic<bool> dml_sticky_unavailable_{false};
+    std::atomic<bool> memshare_warned_{false};
+    std::mutex oom_mu_;
+    std::map<std::string, std::chrono::steady_clock::time_point> oom_memo_;
 };
 
 // Returns a strong reference to the live engine iff `h` is the current engine handle; throws otherwise.

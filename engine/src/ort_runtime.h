@@ -16,6 +16,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -86,18 +87,27 @@ public:
     const std::vector<std::string>& providers() const noexcept { return providers_; }
     platform::DynLib& lib() noexcept { return lib_; }
     int cpu_threads() const noexcept { return cpu_threads_; }
+    // Registers one CUDA arena in the env shared by all sessions ("CUDA Memory Sharing"). Thread-safe.
+    bool cuda_shared_arena(int device_id);
 
     // Candidate library locations for a deps directory, in preference order.
     static std::vector<std::filesystem::path> candidate_libs(const std::filesystem::path& deps_dir, bool prefer_cuda, bool prefer_dml);
 
 private:
+    static void preload_dependencies(const std::filesystem::path& dir);
     platform::DynLib lib_;
     std::filesystem::path lib_path_;
     std::unique_ptr<Ort::Env> env_;
     std::string version_;
     std::vector<std::string> providers_;
     int cpu_threads_ = 2;
+    std::mutex arena_mu_;
+    bool arena_registered_ = false;
+    bool arena_failed_ = false;
 };
+
+// Appends the execution provider for cfg.backend to the session options. Throws dms::Error.
+void append_execution_provider(OrtRuntime& rt, Ort::SessionOptions& so, const SessionConfig& cfg);
 
 // Classifies an ORT error message into a dms_status (OOM detection drives the fallback chain).
 dms_status classify_ort_error(const std::string& what) noexcept;
