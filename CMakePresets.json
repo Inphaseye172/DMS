@@ -47,14 +47,14 @@
     {
       "name": "windows-base",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "DMS_BUILD_PLUGIN": "ON",
         "DMS_BUILD_CLI": "ON",
         "DMS_BUILD_TESTS": "ON"
-      }
+      },
+      "description": "Uses the newest installed Visual Studio (CMake default generator on Windows). Pass -G to choose another."
     },
     {
       "name": "windows-release",

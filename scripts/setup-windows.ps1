@@ -123,16 +123,12 @@ if (Test-Path $vswhere) {
     $vs = $all | Where-Object { $_.installationVersion -like "17.*" } | Select-Object -First 1
     if (-not $vs) { $vs = $all | Sort-Object { [version]$_.installationVersion } -Descending | Select-Object -First 1 }
 }
+$vsMajor = 0
 if ($vs) {
     $vsMajor = ([version]$vs.installationVersion).Major
-    $vsYear = ""
-    if ($vs.PSObject.Properties["catalog"] -and $vs.catalog.PSObject.Properties["productLineVersion"]) { $vsYear = $vs.catalog.productLineVersion }
-    if (-not $Generator) {
-        if ($vsMajor -eq 17) { $Generator = "Visual Studio 17 2022" } else { $Generator = "Visual Studio $vsMajor $vsYear" }
-    }
-    $status = "OK"
-    if ($vsMajor -ne 17) { $status = "WARN" }
-    Add-Result "Visual Studio C++" $status "$($vs.displayName) $($vs.installationVersion) -> generator '$Generator'$(if ($vsMajor -ne 17) { ' (project targets VS 2022; newer should work)' })"
+    $note = ""
+    if ($vsMajor -gt 17) { $note = " (project was written for VS 2022; newer MSVC should work)" }
+    Add-Result "Visual Studio C++" "OK" "$($vs.displayName) $($vs.installationVersion)$note"
 } else {
     Add-Result "Visual Studio C++" "FAIL" ("install VS 2022 with the C++ workload: winget install --id Microsoft.VisualStudio.2022.Community -e " +
         "--override `"--add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended --passive`"")
@@ -151,12 +147,33 @@ $candidates = @()
 $c = Get-Command cmake -ErrorAction SilentlyContinue
 if ($c) { $candidates += $c.Source }
 if ($vs) { $candidates += (Join-Path $vs.installationPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe") }
-foreach ($cand in $candidates) {
+# Generator names come from `cmake --help` (e.g. "Visual Studio 17 2022", "Visual Studio 18 2026"),
+# so a cmake that does not know the installed Visual Studio version is skipped.
+function Get-VsGenerator([string]$cmakeExe, [int]$major) {
+    foreach ($l in (Get-NativeOutput $cmakeExe @("--help"))) {
+        if ($l -match "^\s*\*?\s*(Visual Studio $major \d{4})\b") { return $Matches[1] }
+    }
+    return $null
+}
+$tooOld = @()
+foreach ($cand in ($candidates | Select-Object -Unique)) {
     if (-not (Test-Path $cand)) { continue }
     $line = Get-NativeOutput $cand @("--version") | Select-Object -First 1
-    if ($line -match "(\d+\.\d+(\.\d+)?)" -and [version]$Matches[1] -ge [version]"3.25") { $cmake = $cand; Add-Result "CMake" "OK" "$line ($cand)"; break }
+    if (-not ($line -match "(\d+\.\d+(\.\d+)?)" -and [version]$Matches[1] -ge [version]"3.25")) { $tooOld += "$line ($cand)"; continue }
+    if (-not $Generator -and $vsMajor -gt 0) {
+        $g = Get-VsGenerator $cand $vsMajor
+        if (-not $g) { $tooOld += "$line does not know Visual Studio $vsMajor ($cand)"; continue }
+        $Generator = $g
+    }
+    $cmake = $cand
+    Add-Result "CMake" "OK" "$line ($cand) -> generator '$Generator'"
+    break
 }
-if (-not $cmake) { Add-Result "CMake" "FAIL" "CMake >= 3.25 needed: winget install --id Kitware.CMake -e"; $Fatal = $true }
+if (-not $cmake) {
+    $why = if ($tooOld.Count) { " Rejected: $($tooOld -join '; ')." } else { "" }
+    Add-Result "CMake" "FAIL" "need CMake >= 3.25 that supports your Visual Studio: winget install --id Kitware.CMake -e.$why"
+    $Fatal = $true
+}
 $ctest = $null
 if ($cmake) { $ctest = Join-Path (Split-Path $cmake) "ctest.exe" }
 
@@ -209,8 +226,15 @@ function Find-AeSdk([string]$start) {
     return $null
 }
 $sdkRoot = $null
-if ($AeSdk) { $sdkRoot = Find-AeSdk $AeSdk }
-if (-not $sdkRoot -and -not $AeSdk) {
+$sdkNote = ""
+if ($AeSdk) {
+    if (-not (Test-Path $AeSdk)) { $sdkNote = "the -AeSdk folder '$AeSdk' does not exist. " }
+    else {
+        $sdkRoot = Find-AeSdk $AeSdk
+        if (-not $sdkRoot) { $sdkNote = "no Headers\AE_Effect.h found under '$AeSdk' (is it unzipped?). " }
+    }
+}
+if (-not $sdkRoot) {
     foreach ($base in @("C:\SDKs", "C:\AE_SDK", (Join-Path $HOME "Downloads"), (Join-Path $HOME "Documents"), (Join-Path $HOME "Desktop"))) {
         if (-not (Test-Path $base)) { continue }
         foreach ($d in @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "(?i)after.?effects.*sdk|ae.?sdk" })) {
@@ -223,14 +247,15 @@ if (-not $sdkRoot -and -not $AeSdk) {
 $pipl = $null
 if ($sdkRoot) { $pipl = Get-ChildItem -Path $sdkRoot -Recurse -Filter "PiPLtool.exe" -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1 }
 if ($sdkRoot -and $pipl) {
-    Add-Result "After Effects SDK" "OK" $sdkRoot
+    $found = if ($sdkNote) { " (found by searching; $sdkNote" + "ignored -AeSdk)" } else { "" }
+    Add-Result "After Effects SDK" "OK" "$sdkRoot$found"
 } elseif ($sdkRoot) {
     Add-Result "After Effects SDK" "WARN" "$sdkRoot has headers but no PiPLtool.exe under Resources - plug-in build will fail"
 } else {
     $zip = Get-ChildItem (Join-Path $HOME "Downloads") -Filter "*fter*ffects*SDK*.zip" -ErrorAction SilentlyContinue | Select-Object -First 1
     $hint = "download it from https://developer.adobe.com/after-effects/ (Adobe ID), unzip, re-run with -AeSdk <folder>"
     if ($zip) { $hint = "found $($zip.FullName) - unzip it, then re-run with -AeSdk <unzipped folder>" }
-    if ($AeSdk) { $hint = "no Headers\AE_Effect.h under '$AeSdk'. " + $hint }
+    $hint = $sdkNote + $hint
     Add-Result "After Effects SDK" "WARN" "$hint. Building engine + CLI + tests only."
 }
 $buildPlugin = [bool]($sdkRoot -and -not $EngineOnly)

@@ -30,7 +30,7 @@ The engine, the CLI and the tests build and run on Linux too (see the README). T
 
 ## Prerequisites
 
-- Windows 11 x64, Visual Studio 2022 (Desktop C++ workload), CMake ≥ 3.25 (the VS one is fine), Git.
+- Windows 10/11 x64, Visual Studio 2022 or 2026 (Desktop C++ workload), CMake ≥ 3.25 that knows your Visual Studio version (the one bundled with VS is fine), Git. Presets use the newest installed Visual Studio.
 - After Effects SDK 2025 or 2026 from <https://developer.adobe.com/after-effects/>. Unzip it, then set
   `AE_SDK_ROOT` to the folder that contains `Examples` (or to `Examples` itself).
 - For the NVIDIA path, an NVIDIA driver ≥ 527.41 (≥ 560 for CUDA Memory Sharing). No CUDA toolkit is needed.
