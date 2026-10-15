@@ -1,0 +1,4 @@
+// Extra resources: comctl32 v6 manifest used via an explicit activation context (DMS_Depth_Dialog.cpp).
+// Resource id 2 = ISOLATIONAWARE_MANIFEST_RESOURCE_ID.
+#include <winres.h>
+2 RT_MANIFEST "dms_comctl.manifest"

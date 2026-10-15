@@ -1,0 +1,166 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "DMS_BUILD_PLUGIN": "OFF",
+        "DMS_BUILD_CLI": "ON",
+        "DMS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "inherits": "linux-base",
+      "displayName": "Linux Debug (ASan/UBSan)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DMS_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "inherits": "linux-base",
+      "displayName": "Linux Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-tidy",
+      "inherits": "linux-release",
+      "displayName": "Linux Release + clang-tidy",
+      "cacheVariables": {
+        "DMS_ENABLE_CLANG_TIDY": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "clang"
+      }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "DMS_BUILD_PLUGIN": "ON",
+        "DMS_BUILD_CLI": "ON",
+        "DMS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-base",
+      "displayName": "Windows Release (plugin + CLI + tests)"
+    },
+    {
+      "name": "windows-debug",
+      "inherits": "windows-base",
+      "displayName": "Windows Debug (ASan on engine/CLI/tests; plugin not built)",
+      "cacheVariables": {
+        "DMS_ENABLE_ASAN": "ON",
+        "DMS_BUILD_PLUGIN": "OFF"
+      }
+    },
+    {
+      "name": "windows-analyze",
+      "inherits": "windows-base",
+      "displayName": "Windows Release + /analyze",
+      "cacheVariables": {
+        "DMS_ENABLE_MSVC_ANALYZE": "ON"
+      }
+    },
+    {
+      "name": "windows-engine-only",
+      "inherits": "windows-base",
+      "displayName": "Windows: engine + CLI + tests, no AE SDK",
+      "cacheVariables": {
+        "DMS_BUILD_PLUGIN": "OFF"
+      }
+    },
+    {
+      "name": "windows-plugin-debug",
+      "inherits": "windows-base",
+      "displayName": "Windows Debug plugin (no ASan; attach a debugger to AfterFX.exe)"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug"
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release"
+    },
+    {
+      "name": "linux-tidy",
+      "configurePreset": "linux-tidy"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-analyze",
+      "configurePreset": "windows-analyze",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-engine-only",
+      "configurePreset": "windows-engine-only",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-plugin-debug",
+      "configurePreset": "windows-plugin-debug",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-engine-only",
+      "configurePreset": "windows-engine-only",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

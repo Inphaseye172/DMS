@@ -1,0 +1,14 @@
+build/
+out/
+*.aex
+*.pdb
+*.ilk
+*.obj
+*.log
+__pycache__/
+.vs/
+.vscode/
+.cache/
+tests/fixtures/models/
+tests/fixtures/*.onnx.part
+*.part

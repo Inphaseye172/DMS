@@ -1,0 +1,17 @@
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  cert-err58-cpp,
+  clang-analyzer-*,
+  -clang-analyzer-optin.performance.Padding,
+  concurrency-*,
+  misc-unconventional-assign-operator,
+  misc-throw-by-value-catch-by-reference,
+  performance-*,
+  -performance-enum-size,
+  -performance-avoid-endl
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(engine|plugin/core|tools/depthcli)/.*'
