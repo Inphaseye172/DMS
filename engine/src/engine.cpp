@@ -1,6 +1,7 @@
 // C ABI entry points. Every exported function body runs inside dms::guard().
 #include "engine_impl.h"
 
+#include "colormaps.h"
 #include "image_ops.h"
 #include "postprocess.h"
 #include "platform.h"
@@ -558,6 +559,19 @@ dms_status DMS_API dms_temporal_window(dms_engine* engine, const char* model_id,
                                                                 : WindowSpan{frame_index, 1};
         *out_start = s.start;
         *out_count = s.count;
+        return DMS_OK;
+    });
+}
+
+int32_t DMS_API dms_colormap_count(void) { return dms::colormap_count(); }
+const char* DMS_API dms_colormap_name(int32_t index) { return dms::colormap_name(index); }
+
+dms_status DMS_API dms_apply_colormap(const float* mapped, int32_t width, int32_t height, int32_t colormap_index, float* out_rgb) {
+    return guard("dms_apply_colormap", [&]() -> dms_status {
+        if (!mapped || !out_rgb) fail(DMS_ERR_INVALID_ARG, "NULL buffer");
+        check_dims(width, height, "apply_colormap");
+        if (colormap_index < 0 || colormap_index >= dms::colormap_count()) fail(DMS_ERR_INVALID_ARG, "colormap index out of range");
+        dms::apply_colormap(mapped, pixel_count(width, height), colormap_index, out_rgb);
         return DMS_OK;
     });
 }

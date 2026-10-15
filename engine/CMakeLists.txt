@@ -5,7 +5,6 @@ add_library(dms_engine STATIC
   src/platform.cpp
   src/sha256.cpp
   src/image_ops.cpp
-  src/engine_stubs.cpp
   src/manifest.cpp
   src/transport.cpp
   src/downloader.cpp
@@ -18,6 +17,7 @@ add_library(dms_engine STATIC
   src/instance_registry.cpp
   src/postprocess.cpp
   src/temporal.cpp
+  src/colormaps.cpp
 )
 
 # Built-in model manifest compiled into the engine.
