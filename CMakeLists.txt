@@ -43,7 +43,11 @@ if(DMS_BUILD_PLUGIN)
 endif()
 
 # Compile-only check of the AE glue against tools/ae_sdk_mock (Linux/CI). Not a plugin build.
-option(DMS_AE_GLUE_CHECK "Compile plugin/ae against the AE SDK mock (no linking) when the real plugin is not built" ON)
+set(_dms_glue_default ON)
+if(WIN32)
+  set(_dms_glue_default OFF)  # on Windows build the real plugin instead
+endif()
+option(DMS_AE_GLUE_CHECK "Compile plugin/ae against the AE SDK mock (no linking) when the real plugin is not built" ${_dms_glue_default})
 if(DMS_AE_GLUE_CHECK AND NOT DMS_BUILD_PLUGIN)
   add_library(dms_ae_glue_check OBJECT
     plugin/ae/DMS_Depth.cpp plugin/ae/DMS_Depth_Params.cpp plugin/ae/DMS_Depth_Render.cpp

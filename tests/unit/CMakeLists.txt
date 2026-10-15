@@ -27,7 +27,7 @@ set_target_properties(dms_tests PROPERTIES CXX_CLANG_TIDY "")
 if(MSVC)
   target_compile_options(dms_tests PRIVATE /wd4996)
 endif()
-set_target_properties(dms_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+dms_set_bin_dir(dms_tests)
 
 include(GoogleTest)
 gtest_discover_tests(dms_tests

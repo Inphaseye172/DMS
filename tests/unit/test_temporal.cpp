@@ -163,6 +163,7 @@ TEST(TemporalPlugin, RenderCoreDownscalesWindowAndUsesGuide) {
     using namespace dms_plugin;
     std::vector<std::unique_ptr<FakeWorld>> worlds;
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only
     for (int k = 0; k < 4; ++k) {
         worlds.push_back(std::make_unique<FakeWorld>(1300, 30, PixelDepth::U8));  // wider than 2*518 => downscaled
         for (int y = 0; y < 30; ++y)

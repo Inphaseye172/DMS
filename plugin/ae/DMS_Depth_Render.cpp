@@ -202,7 +202,7 @@ PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRen
         job.output.rowbytes = output->rowbytes;
         job.output.depth = PixelDepth::F32_BGRA;
     } else {
-        PixelDepth out_depth;
+        PixelDepth out_depth = PixelDepth::U8;
         if (!pixel_depth_of(in_data, output, out_depth)) {
             report_message(in_data, out_data, "DMS: unsupported output pixel format");
             return PF_Err_NONE;
@@ -259,7 +259,7 @@ PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtr
     return smart_render_common(
         in_data, out_data, extra, /*gpu=*/false,
         [in_data](PF_EffectWorld* w, WorldView& v) {
-            PixelDepth d;
+            PixelDepth d = PixelDepth::U8;
             if (!w || !pixel_depth_of(in_data, w, d)) return false;
             v = view_of(w, d);
             return true;
@@ -271,7 +271,7 @@ PF_Err legacy_render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
     if (!params || !params[P_INPUT] || !output) return PF_Err_BAD_CALLBACK_PARAM;
     const GlobalData g = read_global(in_data);
     PF_EffectWorld* input = &params[P_INPUT]->u.ld;
-    PixelDepth in_depth, out_depth;
+    PixelDepth in_depth = PixelDepth::U8, out_depth = PixelDepth::U8;
     if (!pixel_depth_of(in_data, output, out_depth)) return PF_Err_NONE;
     RenderJob job;
     job.params = sanitize(read_params_array(in_data, params), dms_colormap_count(), gpu_is_nvidia(g.engine));

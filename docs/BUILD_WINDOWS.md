@@ -1,5 +1,30 @@
 # Building, installing and verifying on Windows
 
+## Quick start (recommended)
+
+```powershell
+git clone -b claude/ae-depth-map-plugin-5iubui https://github.com/inphaseye172/dms.git C:\src\dms
+cd C:\src\dms
+powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 -AeSdk "C:\path\to\unzipped\AfterEffectsSDK" -Install
+```
+
+`scripts\setup-windows.ps1` runs these steps:
+
+1. Checks the prerequisites and prints the exact `winget` command for anything missing.
+2. Fetches the pinned DLLs and checks that every DLL import resolves.
+3. Builds the plug-in and the CLI, then runs the unit tests.
+4. Downloads Depth Anything v2 Small and times it on your GPU and on the CPU.
+5. With `-Install`, installs the plug-in into After Effects 2026 (one UAC prompt; After Effects must be closed).
+
+Everything goes to `build\setup-log.txt`. It is safe to re-run.
+
+- **No AE SDK yet:** leave out `-AeSdk` and the script still builds and tests the engine, the CLI and the real GPU path.
+- **Rough timing:** expect about 2.3 GB of downloads and about 10 minutes the first time.
+
+Then run the **After Effects checklist** at the end of this page.
+
+The manual steps below are what the script automates.
+
 The engine, the CLI and the tests build and run on Linux too (see the README). This page covers the
 `.aex` for After Effects 2026, which needs Windows, MSVC and the After Effects SDK.
 
@@ -23,7 +48,7 @@ python tools\check_deps.py build\DMS_deps                                 # ever
 ```powershell
 $env:AE_SDK_ROOT = "C:\SDKs\AfterEffectsSDK"
 cmake --preset windows-release
-cmake --build --preset windows-release          # -> build\DMS_Depth.aex, build\windows-release\bin\Release\depthcli.exe
+cmake --build --preset windows-release          # -> build\DMS_Depth.aex, build\windows-release\bin\depthcli.exe
 ctest --preset windows-release                  # unit tests (engine, plugin core) on Windows
 ```
 
@@ -67,9 +92,9 @@ Depth Anything v3 and the video model need download sources. Put them in `%LOCAL
 ## 5. CLI on Windows
 
 ```powershell
-build\windows-release\bin\Release\depthcli.exe --device
-build\windows-release\bin\Release\depthcli.exe --download da2-small
-build\windows-release\bin\Release\depthcli.exe -i tests\fixtures\scene_4k.png -o out --colormap Turbo --tiles 4 --log-level 3
+build\windows-release\bin\depthcli.exe --device
+build\windows-release\bin\depthcli.exe --download da2-small
+build\windows-release\bin\depthcli.exe -i tests\fixtures\scene_4k.png -o out --colormap Turbo --tiles 4 --log-level 3
 ```
 
 `depthcli` looks for `DMS_deps` next to the executable. Copy `build\DMS_deps` there, or set `DMS_DEPS_DIR`.
@@ -90,3 +115,26 @@ The report is written to `tests\stress\build\aerender_stress_report.json`. Pass 
 - **Build:** the first 30 compiler errors.
 - **Load or render problems:** `%LOCALAPPDATA%\DMS\logs\dms.log`, the AE version, the GPU model and driver version, and the output of `depthcli --device`.
 - **Stress failures:** `aerender_stress_report.json` and the matching `<comp>.log`.
+
+## After Effects checklist (first session)
+
+Open the log in a text editor while you test: `%LOCALAPPDATA%\DMS\logs\dms.log`.
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Start AE 2026, open the **Effects & Presets** panel | **DMS > DMS Depth Map** is listed. If it is missing, check that `Plug-ins\DMS\DMS_Depth.aex` exists, then look at the log |
+| 2 | Apply the effect to a 1080p footage layer | A grayscale depth map appears, white = near. The first frame is slower because the session is created |
+| 3 | Scrub a few frames, then go back | Revisited frames are instant (frame cache) |
+| 4 | **Mapping Mode = Guided** | Near/Far Guide Points and Near/Far Values appear. Moving a point changes the mapping |
+| 5 | **Mode = Slicing** | Minimum/Maximum appear, Colormap hides; only the selected depth band stays visible |
+| 6 | **Mode = Depth Map, Colormap = Turbo** | A colored depth map |
+| 7 | **Samples = 3** | **Parallel samples** becomes enabled |
+| 8 | Open **Backend & Performance**, turn **Hardware Acceleration** off and on | Renders on CPU (slower) and back on the GPU. The log line `depth ... backend=` shows CUDA or CPU |
+| 9 | **Model = Depth Anything v2 Base** (not downloaded) | The download dialog opens with progress and Cancel. Cancel, then reopen: it resumes |
+| 10 | **Model = Video Depth** | One message: no download source configured. **Memory Optimization** becomes enabled |
+| 11 | Click **Options** in Effect Controls | The dialog shows the GPU, driver, VRAM, backends and model status |
+| 12 | Set the project to 32 bpc and render 100 frames with Multi-Frame Rendering on | No errors; memory stays flat in Task Manager |
+| 13 | Save, close and reopen the project | Parameters are preserved and the effect renders |
+| 14 | Turn **Computation Tiles = 16** on a 4K layer | Slower but works, with no visible tile seams |
+
+Send back anything that differs, along with `dms.log`.

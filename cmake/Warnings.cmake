@@ -1,3 +1,13 @@
+# Same folder for every configuration (multi-config generators would add bin/Release), so the
+# executable always sits next to bin/DMS_deps where the engine looks for ONNX Runtime by default.
+function(dms_set_bin_dir target)
+  set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  foreach(_cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER ${_cfg} _CFG)
+    set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_BINARY_DIR}/bin")
+  endforeach()
+endfunction()
+
 # Warnings-as-errors for all DMS targets. Applied via dms_apply_warnings(<target>).
 function(dms_apply_warnings target)
   if(MSVC)

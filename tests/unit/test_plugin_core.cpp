@@ -150,6 +150,7 @@ TEST_P(PixelDepthTest, RenderWritesExactlyTheOutputWorld) {
     // Sub-rect request: output covers layer rect [5,3)-(25,19).
     FakeWorld out(20, 16, GetParam());
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only, whatever GPU the test machine has
     job.frames = {in.view};
     job.center_index = 0;
     job.input_rect = {0, 0, 37, 21};
@@ -170,6 +171,7 @@ TEST_P(PixelDepthTest, ZeroSizeInputYieldsTransparentOutput) {
     dms_test::EngineHandle eh("render_core_zero");
     FakeWorld out(8, 4, GetParam());
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only, whatever GPU the test machine has
     WorldView empty;
     job.frames = {empty};
     job.output = out.view;
@@ -190,6 +192,7 @@ TEST(PluginCore, OutputOutsideInputIsTransparent) {
         for (int x = 0; x < 10; ++x) in.set(x, y, 1.f, 0.2f, 0.2f, 0.2f);
     FakeWorld out(10, 10, PixelDepth::F32);
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only, whatever GPU the test machine has
     job.frames = {in.view};
     job.input_rect = {0, 0, 10, 10};
     job.output_rect = {5, 5, 15, 15};  // half outside
@@ -229,6 +232,7 @@ TEST(PluginCore, MissingModelRendersGrayAndReportsOnce) {
     FakeWorld in(40, 20, PixelDepth::F32), out(40, 20, PixelDepth::F32);
     fill_gradient(in);
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only, whatever GPU the test machine has
     job.frames = {in.view};
     job.input_rect = {0, 0, 40, 20};
     job.output_rect = {0, 0, 40, 20};
@@ -253,6 +257,7 @@ TEST(PluginCore, FailureAfterSuccessUsesLastGoodDepth) {
     FakeWorld in(40, 20, PixelDepth::U16), out1(40, 20, PixelDepth::U16), out2(40, 20, PixelDepth::U16);
     fill_gradient(in);
     RenderJob job;
+    job.params.hw_accel = 0;  // hermetic: CPU only, whatever GPU the test machine has
     job.frames = {in.view};
     job.input_rect = {0, 0, 40, 20};
     job.output_rect = {0, 0, 40, 20};

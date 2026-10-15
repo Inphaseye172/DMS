@@ -99,10 +99,13 @@ public:
         uc.dwStructSize = sizeof(uc);
         wchar_t host[256] = {0};
         wchar_t path[4096] = {0};
+        wchar_t extra[4096] = {0};
         uc.lpszHostName = host;
         uc.dwHostNameLength = 255;
         uc.lpszUrlPath = path;
         uc.dwUrlPathLength = 4095;
+        uc.lpszExtraInfo = extra;  // "?query#frag": without this buffer WinHTTP silently drops it
+        uc.dwExtraInfoLength = 4095;
         if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) {
             r.error = "invalid URL";
             return r;
@@ -122,7 +125,8 @@ public:
             r.error = "WinHttpConnect failed (" + std::to_string(GetLastError()) + ")";
             return r;
         }
-        WinHttpHandle req(WinHttpOpenRequest(conn.h, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
+        const std::wstring object = std::wstring(path) + extra;
+        WinHttpHandle req(WinHttpOpenRequest(conn.h, L"GET", object.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
         if (!req.h) {
             r.error = "WinHttpOpenRequest failed (" + std::to_string(GetLastError()) + ")";
             return r;
