@@ -5,6 +5,7 @@
 #include "image_ops.h"
 #include "pipeline.h"
 #include "platform.h"
+#include "postprocess.h"
 
 #include <algorithm>
 #include <chrono>
@@ -362,8 +363,19 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     }
     if (!ok) fail(last, last_err.empty() ? std::string(dms_status_message(last)) : last_err + (trail.empty() ? "" : " [" + trail + "]"));
 
-    // ---- copy out ----
+    // ---- edge enhancement / subpixel smoothing (full resolution, part of the cached result) ----
     auto t = Clock::now();
+    const float edges = clampf(req.edges_enhancement, 0.f, 100.f);
+    const float smoothing = clampf(req.subpixel_smoothing, 0.f, 100.f);
+    if (edges > 0.f) {
+        const FrameView& cf = ctx.frames[static_cast<size_t>(ctx.center)];
+        refine_edges(ctx.depth.data(), cf.rgb, cf.stride, w, h, edges, ctx.depth.data());
+    }
+    if (smoothing > 0.f) smooth_depth(ctx.depth.data(), w, h, smoothing, ctx.depth.data());
+    ctx.times.postprocess += ms_since(t);
+
+    // ---- copy out ----
+    t = Clock::now();
     float mn = 0.f, mx = 0.f;
     if (!finite_min_max(ctx.depth.data(), ctx.depth.size(), mn, mx)) fail(DMS_ERR_INFERENCE_FAILED, "no finite depth values");
     std::copy(ctx.depth.begin(), ctx.depth.end(), res.depth);

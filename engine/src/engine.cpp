@@ -2,6 +2,7 @@
 #include "engine_impl.h"
 
 #include "image_ops.h"
+#include "postprocess.h"
 #include "platform.h"
 #include "sha256.h"
 
@@ -503,6 +504,45 @@ dms_status DMS_API dms_instance_should_report(dms_engine* engine, const uint8_t 
         auto e = lock_engine(engine);
         if (!out_first) fail(DMS_ERR_INVALID_ARG, "out_first is NULL");
         *out_first = e->instances().should_report(to_guid(guid), code) ? 1 : 0;
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_map_depth(const float* depth, int32_t width, int32_t height, const dms_mapping_params* params, float* out) {
+    return guard("dms_map_depth", [&]() -> dms_status {
+        if (!depth || !out) fail(DMS_ERR_INVALID_ARG, "NULL buffer");
+        check_dims(width, height, "map_depth");
+        check_struct(params, "dms_mapping_params");
+        if (params->mode < DMS_MAP_RAW || params->mode > DMS_MAP_GUIDED) fail(DMS_ERR_INVALID_ARG, "invalid mapping mode");
+        map_depth(depth, width, height, *params, out);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_slice_mask(const float* mapped, int32_t width, int32_t height, float min_value, float max_value, float feather, float* out_mask) {
+    return guard("dms_slice_mask", [&]() -> dms_status {
+        if (!mapped || !out_mask) fail(DMS_ERR_INVALID_ARG, "NULL buffer");
+        check_dims(width, height, "slice_mask");
+        slice_mask(mapped, width, height, min_value, max_value, feather, out_mask);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_refine_edges(const float* depth, const float* rgb, int32_t rgb_stride_floats, int32_t width, int32_t height, float strength, float* out) {
+    return guard("dms_refine_edges", [&]() -> dms_status {
+        if (!depth || !rgb || !out) fail(DMS_ERR_INVALID_ARG, "NULL buffer");
+        check_dims(width, height, "refine_edges");
+        if (rgb_stride_floats < width * 3) fail(DMS_ERR_INVALID_ARG, "rgb stride too small");
+        refine_edges(depth, rgb, rgb_stride_floats, width, height, strength, out);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_smooth_depth(const float* depth, int32_t width, int32_t height, float strength, float* out) {
+    return guard("dms_smooth_depth", [&]() -> dms_status {
+        if (!depth || !out) fail(DMS_ERR_INVALID_ARG, "NULL buffer");
+        check_dims(width, height, "smooth_depth");
+        smooth_depth(depth, width, height, strength, out);
         return DMS_OK;
     });
 }
