@@ -61,6 +61,9 @@ Other presets:
 | `windows-plugin-debug` | Debug `.aex` for attaching Visual Studio to `AfterFX.exe` |
 | `windows-analyze` | MSVC `/analyze` |
 
+All targets link the MSVC runtime statically (`/MT`), so the `.aex` never binds to the older
+`msvcp140.dll` that After Effects ships. That makes building with Visual Studio 2026 safe for the plug-in.
+
 If the SDK headers differ from what the glue expects, every SDK-specific name is centralized in `plugin/ae/ae_includes.h` (suite versions) and the four `plugin/ae/DMS_Depth*.cpp` files. The items to check first are listed under "Known risks" in `docs/STABILITY.md`.
 
 ## 3. Install (requires elevation)

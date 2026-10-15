@@ -20,6 +20,15 @@ option(DMS_ENABLE_CLANG_TIDY "Run clang-tidy during the build" OFF)
 option(DMS_ENABLE_MSVC_ANALYZE "Run MSVC /analyze during the build" OFF)
 option(DMS_FETCH_ORT      "Download the pinned ONNX Runtime package at configure time" ON)
 
+# Static MSVC runtime (/MT, /MTd) for everything we build. The .aex runs inside AfterFX.exe, which loads
+# its own (possibly older) msvcp140.dll; a plug-in compiled with a newer toolset (e.g. VS 2026) and the
+# dynamic runtime would bind to that older DLL, which is a known crash source (constexpr std::mutex,
+# VS 2022 17.10+). With the static runtime the plug-in never depends on the host's C++ runtime.
+# Nothing CRT-owned crosses a DLL boundary: ONNX Runtime is used through its C API only.
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(Warnings)
 include(Analyze)
