@@ -20,6 +20,8 @@ endforeach()
 if(AE_SDK_EXAMPLES STREQUAL "")
   message(FATAL_ERROR "AE_SDK_ROOT=${AE_SDK_ROOT} does not contain Headers/AE_Effect.h (looked in <root>/Examples and <root>).")
 endif()
+# Always re-resolve: a cached path would still point into the old folder after the SDK is moved.
+unset(AE_PIPL_TOOL CACHE)
 find_program(AE_PIPL_TOOL NAMES PiPLtool PiPLTool PATHS "${AE_SDK_EXAMPLES}/Resources" "${_ae_root}/Resources" NO_DEFAULT_PATH)
 if(NOT AE_PIPL_TOOL)
   message(FATAL_ERROR "PiPLtool.exe not found under ${AE_SDK_EXAMPLES}/Resources")
