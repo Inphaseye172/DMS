@@ -65,7 +65,7 @@ void set_msg(RenderOutcome& o, const char* a, const char* b = nullptr, const cha
             if (p) m += p;
         if (m.size() > 500) m.resize(500);
         o.message = std::move(m);
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch): a message is optional; the render must proceed
     }
 }
 
@@ -190,6 +190,8 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
             guide.time_den = job.time_den;
         }
 
+        o.ms_convert = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const auto t_engine = std::chrono::steady_clock::now();
         // 2) Inference (or cache hit) via the engine.
         std::vector<float> depth(n, 0.5f);
         dms_depth_request rq{};
@@ -254,6 +256,8 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
             if (dms_instance_should_report(engine, job.instance_guid, static_cast<int32_t>(st), &first) == DMS_OK) o.report_to_user = first != 0;
         }
 
+        o.ms_engine = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t_engine).count();
+        const auto t_copy = std::chrono::steady_clock::now();
         // 3) Mapping over the full map (needs global statistics), then mode-specific output for the sub-rect.
         std::vector<float> mapped(n);
         dms_mapping_params mp{};
@@ -292,6 +296,7 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
         }
         o.output_written = true;
         o.status = degraded ? DMS_ERR_DEGRADED : DMS_OK;
+        o.ms_copyout = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t_copy).count();
     } catch (const std::bad_alloc&) {
         fill_world(job.output, 0.5f, 1.f);
         o.output_written = true;

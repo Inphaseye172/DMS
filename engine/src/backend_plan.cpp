@@ -93,7 +93,7 @@ uint64_t estimate_vram(const ModelSpec& spec, uint64_t model_file_bytes, int iw,
     const double attn = b * heads * tokens * tokens * bytes_per * 2.0;               // scores + softmax, one layer live
     const double acts = b * tokens * dim * bytes_per * 16.0;                          // MLP + residual buffers
     const double head = b * static_cast<double>(iw) * ih * 256.0 * bytes_per;          // DPT decoder feature maps
-    const double weights = resident ? 0.0 : static_cast<double>(model_file_bytes) * (fp16 && spec.fp16_file.empty() ? 1.0 : 1.0) * 1.2;
+    const double weights = resident ? 0.0 : static_cast<double>(model_file_bytes) * 1.2;
     const double workspace = 256.0 * 1024 * 1024;                                      // cuDNN/cuBLAS workspace
     (void)layers;
     return static_cast<uint64_t>((weights + attn + acts + head + workspace) * 1.3);    // 30% safety margin

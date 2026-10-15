@@ -46,7 +46,7 @@ void log_line(PF_InData* in_data, int level, const std::string& msg) noexcept {
     try {
         const GlobalData g = read_global(in_data);
         if (g.engine) dms_log(g.engine, level, msg.c_str());
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch): logging must never throw into the host
     }
 }
 

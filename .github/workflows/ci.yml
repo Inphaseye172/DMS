@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_deps_check:
+        description: "Windows: download all runtime deps (~2.3 GB) and verify DLL closure"
+        type: boolean
+        default: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang clang-tidy
+          python3 -m pip install --user numpy pillow
+      - name: Debug build + tests (ASan/UBSan/LSan, GCC, -Werror)
+        run: |
+          cmake --preset linux-debug
+          cmake --build --preset linux-debug
+          ctest --preset linux-debug
+      - name: Clang + clang-tidy (warnings as errors; includes the AE glue compiled against tools/ae_sdk_mock)
+        run: |
+          cmake --preset linux-tidy
+          cmake --build --preset linux-tidy
+      - name: Stability doc references up to date
+        run: python3 -I tools/gen_stability_doc.py --check
+      - name: Release build + stress smoke (leak/crash/hang)
+        run: |
+          cmake --preset linux-release
+          cmake --build --preset linux-release
+          ctest --preset linux-release
+          python3 -I tests/stress/cli_leak_run.py --cli build/linux-release/bin/depthcli --frames 200 --quick --timeout 600
+
+  windows:
+    runs-on: windows-2022
+    env:
+      # The AE SDK is not redistributable: provide a private download URL as a repository secret.
+      AE_SDK_ZIP_URL: ${{ secrets.AE_SDK_ZIP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Engine + CLI + tests (MSVC /W4 /WX)
+        shell: pwsh
+        run: |
+          cmake --preset windows-engine-only
+          cmake --build --preset windows-engine-only
+          ctest --preset windows-engine-only
+      - name: MSVC /analyze
+        shell: pwsh
+        run: |
+          cmake --preset windows-analyze -DDMS_BUILD_PLUGIN=OFF
+          cmake --build --preset windows-analyze
+      - name: Runtime dependencies + DLL closure
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_deps_check }}
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/fetch-deps.ps1
+          python tools/check_deps.py build/DMS_deps
+      - name: Plugin (.aex) build
+        if: ${{ env.AE_SDK_ZIP_URL != '' }}
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:AE_SDK_ZIP_URL -OutFile aesdk.zip
+          Expand-Archive aesdk.zip -DestinationPath aesdk
+          $env:AE_SDK_ROOT = (Get-ChildItem aesdk -Directory | Select-Object -First 1).FullName
+          cmake --preset windows-release
+          cmake --build --preset windows-release --target DMS_Depth
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: windows-build
+          path: |
+            build/DMS_Depth.aex
+            build/windows-engine-only/bin/Release/depthcli.exe
+          if-no-files-found: ignore

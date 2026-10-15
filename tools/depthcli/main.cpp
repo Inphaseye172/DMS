@@ -88,11 +88,11 @@ bool parse_args(int argc, char** argv, Options& o) {
         auto next = [&](const char* what) -> const char* {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "missing value for %s\n", what);
-                std::exit(2);
+                std::exit(2);  // NOLINT(concurrency-mt-unsafe): single-threaded at argument parsing
             }
             return argv[++i];
         };
-        if (a == "--help" || a == "-h") { usage(); std::exit(0); }
+        if (a == "--help" || a == "-h") { usage(); std::exit(0); }  // NOLINT(concurrency-mt-unsafe): single-threaded here
         else if (a == "--input" || a == "-i") o.inputs.emplace_back(next("--input"));
         else if (a == "--output" || a == "-o") o.output_dir = next("--output");
         else if (a == "--model") o.model = next("--model");
@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
             std::vector<const Image*> imgs;
             bool ok = true;
             for (int k = 0; k < count; ++k) {
-                const Image* im = get_image(static_cast<size_t>(start + k));
+                const Image* im = get_image(static_cast<size_t>(start) + static_cast<size_t>(k));
                 if (!im) { ok = false; break; }
                 imgs.push_back(im);
             }
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
             uint64_t ident = std::hash<std::string>{}(files[fi]);
             if (temporal) {
                 ident = 1469598103934665603ull;
-                for (int k = 0; k < count; ++k) ident = (ident ^ std::hash<std::string>{}(files[static_cast<size_t>(start + k)])) * 1099511628211ull;
+                for (int k = 0; k < count; ++k) ident = (ident ^ std::hash<std::string>{}(files[static_cast<size_t>(start) + static_cast<size_t>(k)])) * 1099511628211ull;
             }
             rq.cache_key.layer_hash = o.no_cache ? 0 : (ident | 1u);
             rq.cache_key.time_num = static_cast<int64_t>(fi);

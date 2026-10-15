@@ -8,6 +8,12 @@ FetchContent_Declare(googletest
   GIT_SHALLOW    FALSE
   SYSTEM)
 FetchContent_MakeAvailable(googletest)
+# clang-tidy covers product code (engine, plugin, CLI); third-party and test code are excluded.
+foreach(_t gtest gtest_main)
+  if(TARGET ${_t})
+    set_target_properties(${_t} PROPERTIES CXX_CLANG_TIDY "")
+  endif()
+endforeach()
 
 file(GLOB DMS_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cpp")
 add_executable(dms_tests ${DMS_TEST_SOURCES})
@@ -17,6 +23,7 @@ target_compile_definitions(dms_tests PRIVATE
   DMS_ORT_RUNTIME_DIR="${DMS_ORT_RUNTIME_DIR}"
   DMS_TEST_TMP_DIR="${CMAKE_BINARY_DIR}/test_tmp")
 dms_apply_warnings(dms_tests)
+set_target_properties(dms_tests PROPERTIES CXX_CLANG_TIDY "")
 if(MSVC)
   target_compile_options(dms_tests PRIVATE /wd4996)
 endif()

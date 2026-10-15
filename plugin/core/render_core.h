@@ -38,6 +38,9 @@ struct RenderOutcome {
     bool report_to_user = false;  // first occurrence of this problem for the instance
     std::string message;
     float ms_total = 0.f;
+    float ms_convert = 0.f;   // world -> RGB float (+ temporal downscale)
+    float ms_engine = 0.f;    // dms_depth_compute (cache, inference, post-processing)
+    float ms_copyout = 0.f;   // mapping + writing the output sub-rect
 };
 
 // Never throws. Always leaves the output world fully written unless status == DMS_ERR_ABORTED.

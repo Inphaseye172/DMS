@@ -227,11 +227,11 @@ PF_Err do_options_dialog(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* 
                 break;
             }
             case kOpenLogs: {
-                char* local = nullptr;
-                size_t len = 0;
-                if (_dupenv_s(&local, &len, "LOCALAPPDATA") == 0 && local) {
-                    open_folder(std::string(local) + "\\DMS\\logs");
-                    free(local);
+                wchar_t local[MAX_PATH] = {0};
+                const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+                if (n > 0 && n < MAX_PATH) {
+                    const std::wstring dir = std::wstring(local) + L"\\DMS\\logs";
+                    ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 }
                 break;
             }

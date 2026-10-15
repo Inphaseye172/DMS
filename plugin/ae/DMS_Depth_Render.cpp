@@ -11,6 +11,8 @@
 #include "pixels.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -176,6 +178,7 @@ PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRen
     if (!pre || pre->magic != kPreRenderMagic) return PF_Err_BAD_CALLBACK_PARAM;
     const GlobalData g = read_global(in_data);
 
+    const auto t_checkout = std::chrono::steady_clock::now();
     // Check out every frame requested in pre-render; RAII checks each one back in on every path.
     std::vector<std::unique_ptr<SmartLayerCheckout>> checkouts;
     checkouts.reserve(static_cast<size_t>(pre->frame_count));
@@ -222,6 +225,7 @@ PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRen
     job.abort_fn = abort_cb;
     job.progress_fn = progress_cb;
     job.callback_user = in_data;
+    const float ms_checkout = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t_checkout).count();
 
     RenderOutcome outcome;
     if (!g.engine) {
@@ -233,9 +237,20 @@ PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRen
     } else {
         outcome = render(g.engine, job);
     }
+    const auto t_commit = std::chrono::steady_clock::now();
     if (outcome.status != DMS_ERR_ABORTED && !commit(output, job.output)) {
         log_line(in_data, DMS_LOG_ERROR, "failed to publish the output world (GPU upload)");
         return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    }
+    const float ms_commit = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t_commit).count();
+    if (g.engine) {
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "render %dx%d frames=%zu%s | checkout %.1f ms, convert %.1f ms, engine %.1f ms, copy-out %.1f ms, upload %.1f ms",
+                      job.output.width, job.output.height, job.frames.size(), gpu ? " (GPU)" : "", static_cast<double>(ms_checkout),
+                      static_cast<double>(outcome.ms_convert), static_cast<double>(outcome.ms_engine), static_cast<double>(outcome.ms_copyout),
+                      static_cast<double>(ms_commit));
+        log_line(in_data, DMS_LOG_DEBUG, line);
     }
     return finish(in_data, out_data, outcome);
 }

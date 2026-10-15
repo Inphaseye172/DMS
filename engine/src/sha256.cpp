@@ -79,10 +79,10 @@ std::array<uint8_t, 32> Sha256::finish() noexcept {
     total_ = saved_total;
     std::array<uint8_t, 32> out{};
     for (int i = 0; i < 8; ++i) {
-        out[static_cast<size_t>(i * 4)] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 24);
-        out[static_cast<size_t>(i * 4 + 1)] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 16);
-        out[static_cast<size_t>(i * 4 + 2)] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 8);
-        out[static_cast<size_t>(i * 4 + 3)] = static_cast<uint8_t>(h_[static_cast<size_t>(i)]);
+        out[static_cast<size_t>(i) * 4] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 24);
+        out[static_cast<size_t>(i) * 4 + 1] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 16);
+        out[static_cast<size_t>(i) * 4 + 2] = static_cast<uint8_t>(h_[static_cast<size_t>(i)] >> 8);
+        out[static_cast<size_t>(i) * 4 + 3] = static_cast<uint8_t>(h_[static_cast<size_t>(i)]);
     }
     return out;
 }

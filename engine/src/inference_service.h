@@ -129,6 +129,7 @@ private:
     void run_job(InferenceJob& job);
     ModelSession& session_for(const InferenceJob& job, float& ms_create);
     void apply_offload_policy_locked_out();
+    void shutdown();
     void evict_all_sessions();
     void publish_sessions();
 

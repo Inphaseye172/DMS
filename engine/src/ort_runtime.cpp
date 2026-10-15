@@ -39,7 +39,7 @@ dms_status classify_ort_error(const std::string& what) noexcept {
             s.find("no cuda-capable device") != std::string::npos || s.find("loadlibrary failed") != std::string::npos ||
             s.find("error loading") != std::string::npos)
             return DMS_ERR_BACKEND_UNAVAILABLE;
-    } catch (...) {
+    } catch (...) {  // NOLINT(bugprone-empty-catch): classification is best effort; fall through to the generic status
     }
     return DMS_ERR_INFERENCE_FAILED;
 }
@@ -51,6 +51,7 @@ void ORT_API_CALL ort_log(void*, OrtLoggingLevel severity, const char* category,
 }
 
 int default_cpu_threads() {
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read once at runtime creation; the engine never calls setenv
     if (const char* e = std::getenv("DMS_CPU_THREADS"); e && *e) return clampi(std::atoi(e), 1, 256);
     const unsigned hc = std::thread::hardware_concurrency();
     // Leave headroom for the host application's own render threads.
@@ -67,6 +68,7 @@ std::vector<std::filesystem::path> OrtRuntime::candidate_libs(const std::filesys
     const char* name = "libonnxruntime.so";
 #endif
     std::vector<std::filesystem::path> out;
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read once at runtime creation; the engine never calls setenv
     if (const char* e = std::getenv("DMS_ORT_LIB"); e && *e) out.push_back(platform::path_from_utf8(e));
     std::vector<const char*> subdirs;
     if (prefer_cuda) subdirs.push_back("ort-cuda");
@@ -186,11 +188,13 @@ struct ProviderOptionList {
     }
     std::vector<const char*> k() const {
         std::vector<const char*> o;
+        o.reserve(keys.size());
         for (const auto& x : keys) o.push_back(x.c_str());
         return o;
     }
     std::vector<const char*> v() const {
         std::vector<const char*> o;
+        o.reserve(values.size());
         for (const auto& x : values) o.push_back(x.c_str());
         return o;
     }

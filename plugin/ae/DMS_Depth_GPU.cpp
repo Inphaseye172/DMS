@@ -78,7 +78,7 @@ bool copy_2d(const CudaDriver& d, CUstream stream, bool to_host, void* host, con
     c.Height = rows;
     if (to_host) {
         c.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-        c.srcDevice = reinterpret_cast<CUdeviceptr>(device);
+        c.srcDevice = static_cast<CUdeviceptr>(reinterpret_cast<uintptr_t>(device));
         c.srcPitch = pitch;
         c.dstMemoryType = CU_MEMORYTYPE_HOST;
         c.dstHost = host;
@@ -88,7 +88,7 @@ bool copy_2d(const CudaDriver& d, CUstream stream, bool to_host, void* host, con
         c.srcHost = host;
         c.srcPitch = pitch;
         c.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-        c.dstDevice = reinterpret_cast<CUdeviceptr>(const_cast<void*>(device));
+        c.dstDevice = static_cast<CUdeviceptr>(reinterpret_cast<uintptr_t>(device));
         c.dstPitch = pitch;
     }
     if (d.memcpy2d_async(&c, stream) != 0) return false;

@@ -41,7 +41,9 @@ std::filesystem::path default_data_dir() {
     if (raw) CoTaskMemFree(raw);
     return out;
 #else
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read-only, the engine never calls setenv
     if (const char* x = std::getenv("XDG_STATE_HOME"); x && *x) return std::filesystem::path(x) / "dms";
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read-only, the engine never calls setenv
     if (const char* h = std::getenv("HOME"); h && *h) return std::filesystem::path(h) / ".local" / "state" / "dms";
     return std::filesystem::temp_directory_path() / "dms";
 #endif
@@ -129,7 +131,7 @@ DynLib::DynLib(const std::filesystem::path& path, const std::filesystem::path& s
     (void)search_dir;
     h_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!h_) {
-        const char* e = dlerror();
+        const char* e = dlerror();  // NOLINT(concurrency-mt-unsafe): glibc keeps dlerror state per thread
         err_ = e ? e : ("dlopen failed for " + path.string());
     }
 #endif

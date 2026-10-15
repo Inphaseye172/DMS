@@ -17,6 +17,15 @@ InferenceService::InferenceService(RuntimeFactory runtime_factory, size_t queue_
 }
 
 InferenceService::~InferenceService() {
+    try {
+        shutdown();
+    } catch (...) {
+        // A destructor must not throw (e.g. std::system_error from join); nothing else can be done here.
+        log(DMS_LOG_ERROR, "InferenceService shutdown raised an exception");
+    }
+}
+
+void InferenceService::shutdown() {
     {
         std::lock_guard<std::mutex> lk(mu_);
         stop_ = true;
@@ -138,6 +147,7 @@ void InferenceService::release_sessions(uint32_t timeout_ms) {
 
 void InferenceService::publish_sessions() {
     std::vector<SessionConfig> keys;
+    keys.reserve(sessions_.size());
     for (const auto& s : sessions_) keys.push_back(s.first);
     std::lock_guard<std::mutex> lk(mu_);
     session_count_snapshot_ = keys.size();

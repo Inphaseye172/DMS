@@ -31,10 +31,23 @@ EngineConfig resolve_config(const dms_engine_config* c) {
     out.models_dir = data / "models";
     out.log_dir = data / "logs";
     out.deps_dir = platform::module_dir() / "DMS_deps";
+    // Environment overrides are read once at engine creation; the engine never calls setenv.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     if (const char* env = std::getenv("DMS_MODELS_DIR"); env && *env) out.models_dir = platform::path_from_utf8(env);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     if (const char* env = std::getenv("DMS_LOG_DIR"); env && *env) out.log_dir = platform::path_from_utf8(env);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    if (const char* env = std::getenv("DMS_CACHE_MB"); env && *env) {
+        const long long mb = std::atoll(env);
+        if (mb > 0) out.cache_budget_bytes = static_cast<uint64_t>(mb) << 20;
+    }
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     if (const char* env = std::getenv("DMS_DEPS_DIR"); env && *env) out.deps_dir = platform::path_from_utf8(env);
-    if (!c) return out;
+    if (!c) {
+        const auto mem = platform::system_memory();
+        if (mem.total > 0 && out.cache_budget_bytes > mem.total / 4) out.cache_budget_bytes = mem.total / 4;
+        return out;
+    }
     if (c->struct_size < sizeof(uint32_t)) fail(DMS_ERR_INVALID_ARG, "dms_engine_config.struct_size not set");
     if (c->models_dir && *c->models_dir) out.models_dir = platform::path_from_utf8(c->models_dir);
     if (c->log_dir && *c->log_dir) out.log_dir = platform::path_from_utf8(c->log_dir);

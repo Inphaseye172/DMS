@@ -199,6 +199,7 @@ public:
         }
         args.push_back(url);
         std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
         for (auto& a : args) argv.push_back(a.data());
         argv.push_back(nullptr);
         pid_t pid = 0;

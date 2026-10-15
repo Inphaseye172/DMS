@@ -93,8 +93,7 @@ void Logger::write(int level, const std::string& msg) noexcept {
         std::fflush(fp_);
         if (n > 0) bytes_ += static_cast<size_t>(n);
         if (bytes_ >= max_bytes_) rotate_locked();
-    } catch (...) {
-        // Logging must never throw.
+    } catch (...) {  // NOLINT(bugprone-empty-catch): logging must never throw and has nowhere to report
     }
 }
 

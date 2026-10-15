@@ -382,7 +382,7 @@ dms_status Engine::run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& 
         job->input = pool_->take(img * static_cast<size_t>(count));
         job->output = pool_->take(plane * static_cast<size_t>(count));
         for (int k = 0; k < count; ++k) {
-            const FrameView& fv = ctx.frames[static_cast<size_t>(first + k)];
+            const FrameView& fv = ctx.frames[static_cast<size_t>(first) + static_cast<size_t>(k)];
             preprocess_crop(fv, Crop{0, 0, fv.width, fv.height}, iw, ih, aug, job->input.data() + img * static_cast<size_t>(k));
         }
         job->shape = {1, count, 3, ih, iw};
@@ -435,7 +435,7 @@ dms_status Engine::run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& 
     AffineAccumulator fit;
     std::vector<float> small(static_cast<size_t>(aw) * static_cast<size_t>(ah));
     for (int k = 0; k < count; ++k) {
-        const FrameView& fv = ctx.frames[static_cast<size_t>(first + k)];
+        const FrameView& fv = ctx.frames[static_cast<size_t>(first) + static_cast<size_t>(k)];
         fps[static_cast<size_t>(k)] = frame_fingerprint(fv.rgb, fv.width, fv.height, fv.stride);
         PlaneStore::Plane anchor;
         if (anchors_.get(ctx.spec.id + "|" + std::to_string(fps[static_cast<size_t>(k)]), anchor) && anchor.w == aw && anchor.h == ah) {
@@ -456,7 +456,7 @@ dms_status Engine::run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& 
         // Every frame of the window is kept so its own render does not re-run the model.
         if (!ctx.temporal_key_prefix.empty()) {
             const dms_frame& fr = req.frames[first + k];
-            temporal_store_.put(ctx.temporal_key_prefix + std::to_string(ctx.frames[static_cast<size_t>(first + k)].stride) + "|" +
+            temporal_store_.put(ctx.temporal_key_prefix + std::to_string(ctx.frames[static_cast<size_t>(first) + static_cast<size_t>(k)].stride) + "|" +
                                     std::to_string(fr.time_num) + "/" + std::to_string(fr.time_den),
                                 PlaneStore::Plane{std::make_shared<const std::vector<float>>(acc[static_cast<size_t>(k)]), ow, oh});
         }
@@ -477,7 +477,9 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     const dms_frame& center = req.frames[req.center_index];
     check_dims(center.width, center.height, "frame");
     for (int32_t i = 0; i < req.frame_count; ++i) validate_frame(req.frames[i], center.width, center.height);
-    const bool has_guide = req.struct_size >= offsetof(dms_depth_request, guide) + sizeof(req.guide) && req.guide != nullptr;
+    // The guide field is the last member: only read it if the caller's struct is new enough to contain it.
+    constexpr size_t kGuideEnd = offsetof(dms_depth_request, guide) + sizeof(void*);
+    const bool has_guide = req.struct_size >= kGuideEnd && req.guide != nullptr;
     if (has_guide) validate_frame(*req.guide, req.guide->width, req.guide->height);
     const int w = has_guide ? req.guide->width : center.width;
     const int h = has_guide ? req.guide->height : center.height;
