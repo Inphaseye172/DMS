@@ -53,3 +53,16 @@ TEST(EngineLifecycle, ConcurrentAcquireRelease) {
     for (auto& t : ts) t.join();
     SUCCEED();
 }
+
+TEST(EngineLifecycle, GpuVendorQueryIsCheapAndSafe) {
+    dms_test::EngineHandle eh("gpu_vendor");
+    int32_t v = -1;
+    ASSERT_EQ(dms_gpu_vendor_query(eh.e, &v), DMS_OK);
+    EXPECT_GE(v, DMS_GPU_UNKNOWN);
+    EXPECT_EQ(dms_gpu_vendor_query(eh.e, nullptr), DMS_ERR_INVALID_ARG);
+    dms_device_info di{};
+    di.struct_size = sizeof(di);
+    ASSERT_EQ(dms_device_query(eh.e, &di), DMS_OK);
+    EXPECT_EQ(di.gpu_vendor, v);
+    EXPECT_GT(di.ram_total_bytes, 0u);
+}

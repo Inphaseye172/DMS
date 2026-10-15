@@ -157,7 +157,10 @@ typedef struct dms_device_info {
     char notes[DMS_MAX_MSG];        /* why something is unavailable */
 } dms_device_info;
 
+/* Full device report. Loads ONNX Runtime on first use (can take ~1 s): call from Options / CLI, not per frame. */
 dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_info);
+/* Cheap GPU vendor query (GPU probe only, never loads ONNX Runtime). Safe for UI commands and per-frame use. */
+dms_status DMS_API dms_gpu_vendor_query(dms_engine* engine, int32_t* out_vendor);
 
 /* ----- Inference ------------------------------------------------------------------------------ */
 

@@ -142,9 +142,8 @@ RawParamValues read_params_checkout(PF_InData* in_data) {
 
 bool gpu_is_nvidia(dms_engine* engine) noexcept {
     if (!engine) return false;
-    dms_device_info di{};
-    di.struct_size = sizeof(di);
-    return dms_device_query(engine, &di) == DMS_OK && di.gpu_vendor == DMS_GPU_NVIDIA;
+    int32_t vendor = DMS_GPU_UNKNOWN;  // GPU probe only: never loads ONNX Runtime on the UI thread
+    return dms_gpu_vendor_query(engine, &vendor) == DMS_OK && vendor == DMS_GPU_NVIDIA;
 }
 
 PF_Err update_params_ui(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[]) {

@@ -389,6 +389,15 @@ dms_status DMS_API dms_download_cancel(dms_engine* engine, const char* model_id)
     });
 }
 
+dms_status DMS_API dms_gpu_vendor_query(dms_engine* engine, int32_t* out_vendor) {
+    return guard("dms_gpu_vendor_query", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!out_vendor) fail(DMS_ERR_INVALID_ARG, "out_vendor is NULL");
+        *out_vendor = e->gpu().snapshot().vendor;
+        return DMS_OK;
+    });
+}
+
 dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_info) {
     return guard("dms_device_query", [&]() -> dms_status {
         auto e = lock_engine(engine);
