@@ -123,7 +123,7 @@ function Get-VsInstances([string[]]$extra) {
     return @($parsed | ForEach-Object { $_ })
 }
 if (Test-Path $vswhere) {
-    $allVs = Get-VsInstances @()
+    $allVs = @(Get-VsInstances @())  # @(): a single instance must stay an array (PS 5.1 StrictMode has no .Count on scalars)
     $withCpp = @((Get-VsInstances @("-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64")) | ForEach-Object { $_.instanceId })
     foreach ($i in $allVs) {
         $complete = (-not $i.PSObject.Properties["isComplete"]) -or $i.isComplete
