@@ -6,6 +6,7 @@
 #include "sha256.h"
 
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 
@@ -57,7 +58,11 @@ std::unique_ptr<Logger> make_logger(const EngineConfig& c) {
 }  // namespace
 
 Engine::Engine(EngineConfig cfg)
-    : cfg_(std::move(cfg)), logger_(make_logger(cfg_)), manifest_(cfg_.models_dir), downloader_() {
+    : cfg_(std::move(cfg)),
+      logger_(make_logger(cfg_)),
+      manifest_(cfg_.models_dir),
+      downloader_(),
+      cache_(cfg_.cache_budget_bytes, [] { return platform::system_memory().available; }) {
     inference_ = std::make_unique<InferenceService>([this] { return make_runtime(); }, 8, cfg_.offload_idle_ms);
     logf(DMS_LOG_INFO, "DMS engine %s starting; models=%s deps=%s", DMS_ENGINE_VERSION_STRING,
          platform::path_to_utf8(cfg_.models_dir).c_str(), platform::path_to_utf8(cfg_.deps_dir).c_str());
@@ -142,6 +147,25 @@ void Engine::fill_model_info(const ModelSpec& m, dms_model_info& out) {
 void Engine::mark_verified(const std::string& id) {
     std::lock_guard<std::mutex> lk(verified_mu_);
     verified_.insert(id);
+}
+
+CacheKey Engine::cache_key(const dms_cache_key& k, const std::string& model_id, int base_res, const dms_backend_settings* b, float edges,
+                           float smoothing, int w, int h) const {
+    CacheKey c;
+    c.layer_hash = k.layer_hash;
+    c.time_num = k.time_num;
+    c.time_den = k.time_den ? k.time_den : 1;
+    c.model_id = model_id;
+    c.base_res = base_res <= 0 ? 518 : clampi(base_res, 112, 2048);
+    const bool hb = b && b->struct_size >= sizeof(uint32_t);
+    c.samples = hb ? clampi(b->samples, 1, 16) : 1;
+    c.tiles = resolve_tiles(hb ? b->tiles : 0, w, h, c.base_res);
+    c.edges_q = static_cast<int>(std::lround(clampf(edges, 0.f, 100.f) * 10.f));
+    c.smoothing_q = static_cast<int>(std::lround(clampf(smoothing, 0.f, 100.f) * 10.f));
+    c.fp16 = hb && b->fp16 != 0;
+    c.width = w;
+    c.height = h;
+    return c;
 }
 
 dms_status Engine::verify_model(const std::string& id) {
@@ -376,6 +400,109 @@ dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_inf
         if (gs.vendor == DMS_GPU_NVIDIA && !gs.driver.at_least(kMinMemShareDriverMajor, kMinMemShareDriverMinor))
             notes += "CUDA Memory Sharing needs driver >= 560. ";
         copy_str(out_info->notes, sizeof(out_info->notes), notes);
+        return DMS_OK;
+    });
+}
+
+namespace {
+InstanceRegistry::Guid to_guid(const uint8_t* g) {
+    if (!g) fail(DMS_ERR_INVALID_ARG, "guid is NULL");
+    InstanceRegistry::Guid out{};
+    std::memcpy(out.data(), g, 16);
+    return out;
+}
+}  // namespace
+
+dms_status DMS_API dms_depth_cache_lookup(dms_engine* engine, const dms_cache_key* key, const char* model_id, int32_t base_resolution,
+                                          const dms_backend_settings* backend, float edges, float smoothing, dms_depth_result* result) {
+    return guard("dms_depth_cache_lookup", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(key, "dms_cache_key");
+        check_struct(result, "dms_depth_result");
+        if (!model_id || !result->depth) fail(DMS_ERR_INVALID_ARG, "NULL argument");
+        check_dims(result->width, result->height, "result");
+        if (key->layer_hash == 0) return DMS_ERR_NOT_FOUND;
+        const auto spec = e->manifest().find(model_id);
+        if (!spec) return DMS_ERR_NOT_FOUND;
+        const CacheKey k = e->cache_key(*key, spec->id, base_resolution, backend, edges, smoothing, result->width, result->height);
+        CacheEntry ce;
+        if (!e->cache().get(k, ce)) return DMS_ERR_NOT_FOUND;
+        std::copy(ce.depth->begin(), ce.depth->end(), result->depth);
+        result->from_cache = 1;
+        result->raw_min = ce.raw_min;
+        result->raw_max = ce.raw_max;
+        result->message[0] = '\0';
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_cache_stats_query(dms_engine* engine, dms_cache_stats* out) {
+    return guard("dms_cache_stats_query", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        check_struct(out, "dms_cache_stats");
+        const CacheStats s = e->cache().stats();
+        out->bytes_used = s.bytes_used;
+        out->bytes_budget = s.bytes_budget;
+        out->entries = s.entries;
+        out->hits = s.hits;
+        out->misses = s.misses;
+        out->evictions = s.evictions;
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_cache_clear(dms_engine* engine) {
+    return guard("dms_cache_clear", [&]() -> dms_status {
+        lock_engine(engine)->cache().clear();
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_cache_set_budget(dms_engine* engine, uint64_t bytes) {
+    return guard("dms_cache_set_budget", [&]() -> dms_status {
+        lock_engine(engine)->cache().set_budget(bytes);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_instance_open(dms_engine* engine, const uint8_t guid[16]) {
+    return guard("dms_instance_open", [&]() -> dms_status {
+        lock_engine(engine)->instances().open(to_guid(guid));
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_instance_close(dms_engine* engine, const uint8_t guid[16]) {
+    return guard("dms_instance_close", [&]() -> dms_status {
+        lock_engine(engine)->instances().close(to_guid(guid));
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_instance_last_depth(dms_engine* engine, const uint8_t guid[16], float* out, int32_t width, int32_t height) {
+    return guard("dms_instance_last_depth", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!out) fail(DMS_ERR_INVALID_ARG, "out is NULL");
+        check_dims(width, height, "last_depth");
+        return e->instances().last(to_guid(guid), out, width, height) ? DMS_OK : DMS_ERR_NOT_FOUND;
+    });
+}
+
+dms_status DMS_API dms_instance_store_depth(dms_engine* engine, const uint8_t guid[16], const float* depth, int32_t width, int32_t height) {
+    return guard("dms_instance_store_depth", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!depth) fail(DMS_ERR_INVALID_ARG, "depth is NULL");
+        check_dims(width, height, "store_depth");
+        e->instances().store(to_guid(guid), depth, width, height);
+        return DMS_OK;
+    });
+}
+
+dms_status DMS_API dms_instance_should_report(dms_engine* engine, const uint8_t guid[16], int32_t code, int32_t* out_first) {
+    return guard("dms_instance_should_report", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!out_first) fail(DMS_ERR_INVALID_ARG, "out_first is NULL");
+        *out_first = e->instances().should_report(to_guid(guid), code) ? 1 : 0;
         return DMS_OK;
     });
 }

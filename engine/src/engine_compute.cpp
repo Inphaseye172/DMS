@@ -76,6 +76,7 @@ struct Engine::ComputeCtx {
     std::vector<float> depth;  // full-resolution output of the successful attempt
     StageTimes times;
     Backend used = Backend::CPU;
+    bool full_quality = true;  // false if the successful attempt reduced resolution / changed tiling
 };
 
 GpuMonitor& Engine::gpu() {
@@ -271,6 +272,25 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     ctx.samples = have_backend ? clampi(req.backend.samples, 1, 16) : 1;
     ctx.timeout_ms = req.timeout_ms ? req.timeout_ms : cfg_.inference_timeout_ms;
 
+    // ---- frame cache ----
+    const bool cacheable = req.cache_key.struct_size >= sizeof(uint32_t) && req.cache_key.layer_hash != 0;
+    CacheKey key;
+    if (cacheable) {
+        key = cache_key(req.cache_key, spec->id, base_res, have_backend ? &req.backend : nullptr, req.edges_enhancement, req.subpixel_smoothing, w, h);
+        CacheEntry ce;
+        if (cache_.get(key, ce) && ce.depth && ce.depth->size() == pixel_count(w, h)) {
+            std::copy(ce.depth->begin(), ce.depth->end(), res.depth);
+            res.from_cache = 1;
+            res.backend_used = DMS_BACKEND_NONE;
+            res.fallback_steps = 0;
+            res.raw_min = ce.raw_min;
+            res.raw_max = ce.raw_max;
+            res.message[0] = '\0';
+            res.ms_total = ms_since(t_start);
+            return DMS_OK;
+        }
+    }
+
     // ---- backend plan ----
     inference_->ensure_runtime();  // throws BACKEND_UNAVAILABLE if no ONNX Runtime at all
     const GpuSnapshot gs = gpu().snapshot();
@@ -320,6 +340,7 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
         const dms_status st = run_attempt(ctx, a, err);
         if (st == DMS_OK) {
             ctx.used = a.backend;
+            ctx.full_quality = a.res == base_res && a.tiles == pin.tiles;
             ok = true;
             break;
         }
@@ -346,6 +367,13 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     float mn = 0.f, mx = 0.f;
     if (!finite_min_max(ctx.depth.data(), ctx.depth.size(), mn, mx)) fail(DMS_ERR_INFERENCE_FAILED, "no finite depth values");
     std::copy(ctx.depth.begin(), ctx.depth.end(), res.depth);
+    if (cacheable && ctx.full_quality) {  // reduced-quality fallbacks are not cached (GPU may recover)
+        CacheEntry ce;
+        ce.depth = std::make_shared<const std::vector<float>>(std::move(ctx.depth));
+        ce.raw_min = mn;
+        ce.raw_max = mx;
+        cache_.put(key, std::move(ce));
+    }
     ctx.times.postprocess += ms_since(t);
 
     res.from_cache = 0;

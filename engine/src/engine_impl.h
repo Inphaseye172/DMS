@@ -4,6 +4,8 @@
 #include "common.h"
 #include "backend_plan.h"
 #include "downloader.h"
+#include "frame_cache.h"
+#include "instance_registry.h"
 #include "gpu_probe.h"
 #include "inference_service.h"
 #include "logging.h"
@@ -56,6 +58,11 @@ public:
     Manifest& manifest() noexcept { return manifest_; }
     Downloader& downloader() noexcept { return downloader_; }
     InferenceService& inference() noexcept { return *inference_; }
+    FrameCache& cache() noexcept { return cache_; }
+    InstanceRegistry& instances() noexcept { return instances_; }
+    // Builds the cache key for a request (normalizes every parameter that affects the depth result).
+    CacheKey cache_key(const dms_cache_key& k, const std::string& model_id, int base_res, const dms_backend_settings* b, float edges,
+                       float smoothing, int w, int h) const;
 
     dms_status compute(const dms_depth_request& req, dms_depth_result& res);
     GpuMonitor& gpu();
@@ -85,6 +92,8 @@ private:
     Manifest manifest_;
     Downloader downloader_;
     std::unique_ptr<InferenceService> inference_;
+    FrameCache cache_;
+    InstanceRegistry instances_;
     std::mutex verified_mu_;
     std::set<std::string> verified_;
 

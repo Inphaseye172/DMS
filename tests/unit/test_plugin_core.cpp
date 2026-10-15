@@ -213,3 +213,64 @@ TEST(PluginCore, HashChangesWithContent) {
     b.set(3, 7, 1, 0.5f, 0.6f, 0.5f);
     EXPECT_NE(hash_world(a.view), hash_world(b.view));
 }
+
+namespace {
+void fill_gradient(FakeWorld& w) {
+    for (int y = 0; y < w.view.height; ++y)
+        for (int x = 0; x < w.view.width; ++x) {
+            const float v = static_cast<float>(x) / static_cast<float>(w.view.width - 1);
+            w.set(x, y, 1.f, v, v, v);
+        }
+}
+}  // namespace
+
+TEST(PluginCore, MissingModelRendersGrayAndReportsOnce) {
+    dms_test::EngineHandle eh("render_missing");
+    FakeWorld in(40, 20, PixelDepth::F32), out(40, 20, PixelDepth::F32);
+    fill_gradient(in);
+    RenderJob job;
+    job.frames = {in.view};
+    job.input_rect = {0, 0, 40, 20};
+    job.output_rect = {0, 0, 40, 20};
+    job.output = out.view;
+    job.instance_guid[0] = 0x42;
+    dms_instance_open(eh.e, job.instance_guid);
+    auto o = render(eh.e, job);
+    EXPECT_EQ(o.status, DMS_ERR_DEGRADED);
+    EXPECT_TRUE(o.report_to_user);
+    EXPECT_NE(o.message.find("not installed"), std::string::npos) << o.message;
+    float a = 0, r = 0, g = 0, b = 0;
+    out.get(10, 10, a, r, g, b);
+    EXPECT_NEAR(r, 0.5f, 1e-3f);  // flat mid-gray, never garbage
+    o = render(eh.e, job);
+    EXPECT_FALSE(o.report_to_user);  // no dialog per frame
+}
+
+TEST(PluginCore, FailureAfterSuccessUsesLastGoodDepth) {
+    dms_test::EngineHandle eh("render_lastgood");
+    dms_test::install_synthetic_model(eh.models_dir, "da2-small", "synthetic_depth.onnx");  // stand-in for the real model
+    dms_model_reload_manifest(eh.e);
+    FakeWorld in(40, 20, PixelDepth::U16), out1(40, 20, PixelDepth::U16), out2(40, 20, PixelDepth::U16);
+    fill_gradient(in);
+    RenderJob job;
+    job.frames = {in.view};
+    job.input_rect = {0, 0, 40, 20};
+    job.output_rect = {0, 0, 40, 20};
+    job.output = out1.view;
+    job.instance_guid[0] = 0x43;
+    job.params.mapping = Mapping::Normalize;
+    auto o = render(eh.e, job);
+    ASSERT_EQ(o.status, DMS_OK) << o.message;
+    // Model disappears (deleted / corrupted) and the cache is cleared: the instance's last good map is used.
+    std::filesystem::remove(std::filesystem::path(eh.models_dir) / "synthetic_depth.onnx");
+    dms_cache_clear(eh.e);
+    job.output = out2.view;
+    o = render(eh.e, job);
+    EXPECT_EQ(o.status, DMS_ERR_DEGRADED);
+    EXPECT_NE(o.message.find("last good"), std::string::npos) << o.message;
+    float a1 = 0, r1 = 0, g1 = 0, b1 = 0, a2 = 0, r2 = 0, g2 = 0, b2 = 0;
+    out1.get(30, 10, a1, r1, g1, b1);
+    out2.get(30, 10, a2, r2, g2, b2);
+    EXPECT_NEAR(r1, r2, 0.02f);
+    EXPECT_TRUE(out2.padding_intact());
+}
