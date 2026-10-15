@@ -17,6 +17,7 @@ add_library(dms_engine STATIC
   src/frame_cache.cpp
   src/instance_registry.cpp
   src/postprocess.cpp
+  src/temporal.cpp
 )
 
 # Built-in model manifest compiled into the engine.

@@ -10,6 +10,9 @@ namespace dms_plugin {
 // rgb receives width*height*3 floats; alpha (optional) receives width*height floats.
 bool world_to_rgb(const WorldView& w, std::vector<float>& rgb, std::vector<float>* alpha);
 
+// Bilinear resize of an interleaved RGB float image.
+void resize_rgb(const std::vector<float>& src, int sw, int sh, std::vector<float>& dst, int dw, int dh);
+
 // Fast 64-bit content hash of a world's pixels (used as the cache "layer checksum").
 uint64_t hash_world(const WorldView& w) noexcept;
 uint64_t hash_combine(uint64_t a, uint64_t b) noexcept;

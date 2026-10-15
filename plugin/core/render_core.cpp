@@ -2,6 +2,7 @@
 
 #include "pixels.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -124,9 +125,23 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
         const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
 
         // 1) Convert the window to RGB float. Neighbor frames with mismatched size are dropped.
+        //    Temporal windows are downscaled (long side <= 2x base resolution) to bound host memory;
+        //    the full-resolution center frame is passed separately as the guide.
+        const bool temporal = job.frames.size() > 1;
+        int fw = w, fh = h;
+        if (temporal) {
+            const int max_side = 2 * (job.params.base_res > 0 ? job.params.base_res : 518);
+            if (std::max(w, h) > max_side) {
+                const double sc = static_cast<double>(max_side) / static_cast<double>(std::max(w, h));
+                fw = std::max(1, static_cast<int>(std::lround(w * sc)));
+                fh = std::max(1, static_cast<int>(std::lround(h * sc)));
+            }
+        }
         std::vector<std::vector<float>> rgbs;
+        std::vector<int64_t> times;
         std::vector<dms_frame> frames;
         std::vector<float> alpha;
+        std::vector<float> guide_rgb;
         int32_t center = 0;
         uint64_t content_hash = 0;
         rgbs.reserve(job.frames.size());
@@ -134,24 +149,39 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
             const WorldView& f = job.frames[k];
             const bool is_center = static_cast<int32_t>(k) == job.center_index;
             if (!f.valid() || f.width != w || f.height != h) continue;
+            std::vector<float> full;
+            if (!world_to_rgb(f, full, is_center ? &alpha : nullptr)) continue;
             if (is_center) center = static_cast<int32_t>(rgbs.size());
-            rgbs.emplace_back();
-            if (!world_to_rgb(f, rgbs.back(), is_center ? &alpha : nullptr)) {
-                rgbs.pop_back();
-                continue;
+            if (fw != w || fh != h) {
+                rgbs.emplace_back();
+                resize_rgb(full, w, h, rgbs.back(), fw, fh);
+                if (is_center) guide_rgb = std::move(full);
+            } else {
+                rgbs.push_back(std::move(full));
             }
+            times.push_back(job.time_num + (static_cast<int64_t>(k) - job.center_index) * job.time_step);
             content_hash = hash_combine(content_hash, hash_world(f));
         }
         for (size_t k = 0; k < rgbs.size(); ++k) {
             dms_frame f{};
             f.struct_size = sizeof(f);
             f.rgb = rgbs[k].data();
-            f.width = w;
-            f.height = h;
-            f.row_stride_floats = w * 3;
-            f.time_num = job.time_num + static_cast<int64_t>(k) - center;
+            f.width = fw;
+            f.height = fh;
+            f.row_stride_floats = fw * 3;
+            f.time_num = times[k];
             f.time_den = job.time_den;
             frames.push_back(f);
+        }
+        dms_frame guide{};
+        if (!guide_rgb.empty()) {
+            guide.struct_size = sizeof(guide);
+            guide.rgb = guide_rgb.data();
+            guide.width = w;
+            guide.height = h;
+            guide.row_stride_floats = w * 3;
+            guide.time_num = job.time_num;
+            guide.time_den = job.time_den;
         }
 
         // 2) Inference (or cache hit) via the engine.
@@ -182,6 +212,7 @@ RenderOutcome render(dms_engine* engine, const RenderJob& job) noexcept {
         rq.progress_fn = job.progress_fn;
         rq.user = job.callback_user;
         rq.timeout_ms = job.timeout_ms;
+        rq.guide = guide_rgb.empty() ? nullptr : &guide;
 
         dms_depth_result rs{};
         rs.struct_size = sizeof(rs);

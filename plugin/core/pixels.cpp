@@ -54,6 +54,30 @@ bool world_to_rgb(const WorldView& w, std::vector<float>& rgb, std::vector<float
     return true;
 }
 
+void resize_rgb(const std::vector<float>& src, int sw, int sh, std::vector<float>& dst, int dw, int dh) {
+    dst.resize(static_cast<size_t>(dw) * static_cast<size_t>(dh) * 3u);
+    const float sx = static_cast<float>(sw) / static_cast<float>(dw);
+    const float sy = static_cast<float>(sh) / static_cast<float>(dh);
+    for (int y = 0; y < dh; ++y) {
+        float fy = (static_cast<float>(y) + 0.5f) * sy - 0.5f;
+        fy = fy < 0.f ? 0.f : (fy > static_cast<float>(sh - 1) ? static_cast<float>(sh - 1) : fy);
+        const int y0 = static_cast<int>(fy), y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
+        const float wy = fy - static_cast<float>(y0);
+        for (int x = 0; x < dw; ++x) {
+            float fx = (static_cast<float>(x) + 0.5f) * sx - 0.5f;
+            fx = fx < 0.f ? 0.f : (fx > static_cast<float>(sw - 1) ? static_cast<float>(sw - 1) : fx);
+            const int x0 = static_cast<int>(fx), x1 = x0 + 1 < sw ? x0 + 1 : sw - 1;
+            const float wx = fx - static_cast<float>(x0);
+            for (int c = 0; c < 3; ++c) {
+                auto at = [&](int xx, int yy) { return src[(static_cast<size_t>(yy) * static_cast<size_t>(sw) + static_cast<size_t>(xx)) * 3u + static_cast<size_t>(c)]; };
+                const float top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * wx;
+                const float bot = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * wx;
+                dst[(static_cast<size_t>(y) * static_cast<size_t>(dw) + static_cast<size_t>(x)) * 3u + static_cast<size_t>(c)] = top + (bot - top) * wy;
+            }
+        }
+    }
+}
+
 uint64_t hash_world(const WorldView& w) noexcept {
     if (!w.valid()) return 0;
     const size_t px = w.depth == PixelDepth::U8 ? 4 : w.depth == PixelDepth::U16 ? 8 : 16;

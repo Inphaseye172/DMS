@@ -208,6 +208,9 @@ typedef struct dms_depth_request {
     dms_progress_fn progress_fn;    /* may be NULL */
     void* user;
     uint32_t timeout_ms;            /* 0 = engine default */
+    /* Optional full-resolution center frame. When set, the output (and edge guide) uses its size and
+     * frames[] may be downscaled copies (recommended for temporal windows to bound memory). */
+    const dms_frame* guide;
 } dms_depth_request;
 
 typedef struct dms_depth_result {
@@ -228,6 +231,13 @@ typedef struct dms_depth_result {
 /* Compute (or fetch from cache) a depth map. Thread-safe; inference serialized internally.
  * Returns DMS_OK, DMS_ERR_DEGRADED (output valid but produced by a fallback), or an error (output untouched). */
 dms_status DMS_API dms_depth_compute(dms_engine* engine, const dms_depth_request* request, dms_depth_result* result);
+
+/* Temporal models: the window of frame indices [*out_start, *out_start + *out_count) to supply for
+ * `frame_index` (indices are in frames, relative to any fixed origin; negative results are possible
+ * and simply mean "not available"). Windows overlap by 1/4 so consecutive windows can be aligned.
+ * Single-frame models return start = frame_index, count = 1. */
+dms_status DMS_API dms_temporal_window(dms_engine* engine, const char* model_id, int64_t frame_index, int32_t memory_optimization,
+                                       int64_t* out_start, int32_t* out_count);
 
 /* Cache-only lookup; DMS_ERR_NOT_FOUND if absent. Does not run inference. */
 dms_status DMS_API dms_depth_cache_lookup(dms_engine* engine, const dms_cache_key* key, const char* model_id,

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 
 namespace dms {
 
@@ -64,9 +65,13 @@ struct Engine::ComputeCtx {
     std::filesystem::path model_path;
     std::filesystem::path fp16_path;  // empty if no installed FP16 variant
     uint64_t model_bytes = 0;
-    std::vector<FrameView> frames;
+    std::vector<FrameView> frames;  // model input frames (may be downscaled when a guide is given)
+    FrameView guide;                // full-resolution center frame (output size + edge guide)
     int center = 0;
-    int w = 0, h = 0;
+    int w = 0, h = 0;               // output size (= guide size)
+    bool memopt = false;
+    bool from_temporal_store = false;
+    std::string temporal_key_prefix;  // model|layer_hash|res|fp16|samples|
     int samples = 1;
     bool memshare = false;
     uint32_t timeout_ms = 0;
@@ -228,9 +233,131 @@ dms_status Engine::run_tiled(ComputeCtx&, const Attempt&, std::string& err) {
     return DMS_ERR_UNSUPPORTED;
 }
 
-dms_status Engine::run_temporal(ComputeCtx&, const Attempt&, std::string& err) {
-    err = "temporal models not implemented yet";
-    return DMS_ERR_UNSUPPORTED;
+dms_status Engine::run_temporal(ComputeCtx& ctx, const Attempt& a, std::string& err) {
+    const dms_depth_request& req = *ctx.req;
+    // Restrict to the effective window around the center (callers normally pass exactly the window).
+    const int wmax = effective_window(ctx.spec.window, ctx.memopt);
+    int first = 0, count = static_cast<int>(ctx.frames.size());
+    if (count > wmax) {
+        first = clampi(ctx.center - (wmax - 1) / 2, 0, count - wmax);
+        count = wmax;
+    }
+    const int center = ctx.center - first;
+    const FrameView& f0 = ctx.frames[static_cast<size_t>(first)];
+    int iw = 0, ih = 0;
+    inference_dims(f0.width, f0.height, a.res, ctx.spec.patch_multiple, iw, ih);
+    const size_t img = static_cast<size_t>(3) * static_cast<size_t>(iw) * static_cast<size_t>(ih);
+    const size_t plane = static_cast<size_t>(iw) * static_cast<size_t>(ih);
+    ctx.units_total = ctx.samples;
+    ctx.units_done = 0;
+
+    std::vector<std::vector<float>> acc(static_cast<size_t>(count));
+    int ow = 0, oh = 0;
+    for (int s = 0; s < ctx.samples; ++s) {
+        if (req.abort_fn && req.abort_fn(req.user)) return DMS_ERR_ABORTED;
+        Augment aug = augment_for_sample(s, ctx.samples);
+        if (a.backend != Backend::CPU) {
+            const uint64_t free = gpu().free_vram();
+            const uint64_t need = estimate_vram(ctx.spec, ctx.model_bytes, iw, ih, count, a.fp16, false);
+            if (free > 0 && free < need + cfg_.vram_reserve_bytes) {
+                err = "insufficient VRAM for a " + std::to_string(count) + "-frame window (free " + std::to_string(free >> 20) + " MB, need ~" +
+                      std::to_string(need >> 20) + " MB + reserve); enable Memory Optimization";
+                return DMS_ERR_OUT_OF_MEMORY;
+            }
+        }
+        auto t = Clock::now();
+        auto job = std::make_shared<InferenceJob>(pool_);
+        job->cfg.model_path = a.fp16 && !ctx.fp16_path.empty() ? ctx.fp16_path : ctx.model_path;
+        job->cfg.backend = a.backend;
+        job->cfg.fp16 = a.fp16 && a.backend != Backend::CPU;
+        job->cfg.memshare = ctx.memshare && a.backend == Backend::CUDA;
+        job->offload_mode = clampi(req.backend.struct_size ? req.backend.offload_mode : 0, 0, 2);
+        job->input = pool_->take(img * static_cast<size_t>(count));
+        job->output = pool_->take(plane * static_cast<size_t>(count));
+        for (int k = 0; k < count; ++k) {
+            const FrameView& fv = ctx.frames[static_cast<size_t>(first + k)];
+            preprocess_crop(fv, Crop{0, 0, fv.width, fv.height}, iw, ih, aug, job->input.data() + img * static_cast<size_t>(k));
+        }
+        job->shape = {1, count, 3, ih, iw};
+        ctx.times.preprocess += ms_since(t);
+        const dms_status st = inference_->execute(job, ctx.timeout_ms, req.abort_fn, req.user);
+        if (st != DMS_OK) {
+            err = job->error;
+            return st;
+        }
+        ctx.times.session += job->ms_session;
+        ctx.times.inference += job->ms_run;
+        t = Clock::now();
+        for (int k = 0; k < count; ++k) {
+            int poh = 0, pow_ = 0;
+            const float* p = output_plane(job->output, job->out_shape, 0, static_cast<size_t>(k), poh, pow_);
+            const size_t pn = static_cast<size_t>(poh) * static_cast<size_t>(pow_);
+            std::vector<float> one(p, p + pn);
+            float mn = 0.f, mx = 0.f;
+            if (!finite_min_max(one.data(), pn, mn, mx)) {
+                err = "temporal model produced no finite values";
+                return DMS_ERR_INFERENCE_FAILED;
+            }
+            sanitize(one.data(), pn, mn);
+            deaugment(one.data(), pow_, poh, aug);
+            auto& dst = acc[static_cast<size_t>(k)];
+            if (dst.empty()) dst.assign(pn, 0.f);
+            if (dst.size() != pn) {
+                err = "inconsistent temporal output sizes";
+                return DMS_ERR_INFERENCE_FAILED;
+            }
+            for (size_t i = 0; i < pn; ++i) dst[i] += one[i];
+            ow = pow_;
+            oh = poh;
+        }
+        ctx.times.postprocess += ms_since(t);
+        ++ctx.units_done;
+        if (req.progress_fn && req.progress_fn(req.user, static_cast<float>(ctx.units_done) / static_cast<float>(ctx.samples))) return DMS_ERR_ABORTED;
+    }
+    const auto t = Clock::now();
+    const float inv = 1.f / static_cast<float>(ctx.samples);
+    for (auto& v : acc)
+        for (auto& x : v) x *= inv;
+
+    // Cross-window alignment: frames this window shares with the previous one have anchors (aligned,
+    // small planes keyed by frame content). Fit one affine (scale/shift) for the whole window.
+    constexpr int kAnchorSide = 128;
+    const int aw = std::max(1, ow * kAnchorSide / std::max(ow, oh));
+    const int ah = std::max(1, oh * kAnchorSide / std::max(ow, oh));
+    std::vector<uint64_t> fps(static_cast<size_t>(count));
+    AffineAccumulator fit;
+    std::vector<float> small(static_cast<size_t>(aw) * static_cast<size_t>(ah));
+    for (int k = 0; k < count; ++k) {
+        const FrameView& fv = ctx.frames[static_cast<size_t>(first + k)];
+        fps[static_cast<size_t>(k)] = frame_fingerprint(fv.rgb, fv.width, fv.height, fv.stride);
+        PlaneStore::Plane anchor;
+        if (anchors_.get(ctx.spec.id + "|" + std::to_string(fps[static_cast<size_t>(k)]), anchor) && anchor.w == aw && anchor.h == ah) {
+            resize_bilinear(acc[static_cast<size_t>(k)].data(), ow, oh, small.data(), aw, ah);
+            fit.add(small.data(), anchor.data->data(), small.size());
+        }
+    }
+    Affine af;
+    if (fit.count() > 0 && fit.solve(af)) {
+        for (auto& v : acc)
+            for (auto& x : v) x = static_cast<float>(af.s * static_cast<double>(x) + af.b);
+        logf(DMS_LOG_DEBUG, "temporal window aligned to previous window: scale %.4f shift %.4f (%zu samples)", af.s, af.b, fit.count());
+    }
+    for (int k = 0; k < count; ++k) {
+        auto pl = std::make_shared<std::vector<float>>(static_cast<size_t>(aw) * static_cast<size_t>(ah));
+        resize_bilinear(acc[static_cast<size_t>(k)].data(), ow, oh, pl->data(), aw, ah);
+        anchors_.put(ctx.spec.id + "|" + std::to_string(fps[static_cast<size_t>(k)]), PlaneStore::Plane{pl, aw, ah});
+        // Every frame of the window is kept so its own render does not re-run the model.
+        if (!ctx.temporal_key_prefix.empty()) {
+            const dms_frame& fr = req.frames[first + k];
+            temporal_store_.put(ctx.temporal_key_prefix + std::to_string(ctx.frames[static_cast<size_t>(first + k)].stride) + "|" +
+                                    std::to_string(fr.time_num) + "/" + std::to_string(fr.time_den),
+                                PlaneStore::Plane{std::make_shared<const std::vector<float>>(acc[static_cast<size_t>(k)]), ow, oh});
+        }
+    }
+    ctx.depth.resize(pixel_count(ctx.w, ctx.h));
+    resize_bilinear(acc[static_cast<size_t>(center)].data(), ow, oh, ctx.depth.data(), ctx.w, ctx.h);
+    ctx.times.postprocess += ms_since(t);
+    return DMS_OK;
 }
 
 dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) {
@@ -242,8 +369,11 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
         fail(DMS_ERR_INVALID_ARG, "invalid frames / frame_count / center_index");
     const dms_frame& center = req.frames[req.center_index];
     check_dims(center.width, center.height, "frame");
-    const int w = center.width, h = center.height;
-    for (int32_t i = 0; i < req.frame_count; ++i) validate_frame(req.frames[i], w, h);
+    for (int32_t i = 0; i < req.frame_count; ++i) validate_frame(req.frames[i], center.width, center.height);
+    const bool has_guide = req.struct_size >= offsetof(dms_depth_request, guide) + sizeof(req.guide) && req.guide != nullptr;
+    if (has_guide) validate_frame(*req.guide, req.guide->width, req.guide->height);
+    const int w = has_guide ? req.guide->width : center.width;
+    const int h = has_guide ? req.guide->height : center.height;
     if (!res.depth || res.width != w || res.height != h) fail(DMS_ERR_INVALID_ARG, "result buffer does not match frame size");
     if (!std::isfinite(req.edges_enhancement) || !std::isfinite(req.subpixel_smoothing)) fail(DMS_ERR_INVALID_ARG, "non-finite parameter");
     const int base_res = sanitize_base_res(req.base_resolution);
@@ -267,7 +397,9 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
         if (std::filesystem::is_regular_file(p16, ec) && (!spec->fp16_size || std::filesystem::file_size(p16, ec) == spec->fp16_size)) ctx.fp16_path = p16;
     }
     for (int32_t i = 0; i < req.frame_count; ++i) ctx.frames.push_back(frame_view(req.frames[i]));
+    ctx.guide = has_guide ? frame_view(*req.guide) : frame_view(center);
     ctx.center = req.center_index;
+    ctx.memopt = have_backend && req.backend.memory_optimization != 0 && spec->kind == DMS_MODEL_KIND_TEMPORAL;
     ctx.w = w;
     ctx.h = h;
     ctx.samples = have_backend ? clampi(req.backend.samples, 1, 16) : 1;
@@ -303,7 +435,8 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     pin.tensorrt_compiled = true;
 #endif
     pin.base_res = base_res;
-    pin.tiles = resolve_tiles(have_backend ? req.backend.tiles : 0, w, h, base_res);
+    // Temporal models always run untiled (the window already bounds memory; tiles would break coherence).
+    pin.tiles = spec->kind == DMS_MODEL_KIND_TEMPORAL ? 1 : resolve_tiles(have_backend ? req.backend.tiles : 0, w, h, base_res);
     pin.parallel = have_backend && req.backend.parallel_samples != 0 && ctx.samples > 2;
     pin.patch = spec->patch_multiple;
     pin.gpu = gs;
@@ -322,13 +455,27 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     }
     const std::vector<Attempt> plan = build_plan(pin);
 
+    // Temporal models: a previous window may already contain this frame (pre post-processing).
+    if (spec->kind == DMS_MODEL_KIND_TEMPORAL && cacheable) {
+        ctx.temporal_key_prefix = spec->id + "|" + std::to_string(req.cache_key.layer_hash) + "|" + std::to_string(base_res) + "|" +
+                                  std::to_string(pin.fp16 ? 1 : 0) + "|" + std::to_string(ctx.samples) + "|" + std::to_string(ctx.memopt ? 1 : 0) + "|";
+        PlaneStore::Plane pl;
+        const std::string k = ctx.temporal_key_prefix + std::to_string(ctx.frames[static_cast<size_t>(ctx.center)].stride) + "|" +
+                              std::to_string(req.frames[req.center_index].time_num) + "/" + std::to_string(req.frames[req.center_index].time_den);
+        if (temporal_store_.get(k, pl)) {
+            ctx.depth.resize(pixel_count(w, h));
+            resize_bilinear(pl.data->data(), pl.w, pl.h, ctx.depth.data(), w, h);
+            ctx.from_temporal_store = true;
+        }
+    }
+
     // ---- execute the plan (fallback chain) ----
     std::string trail;
     int steps = 0;
     dms_status last = DMS_ERR_BACKEND_UNAVAILABLE;
     std::string last_err;
-    bool ok = false;
-    for (size_t i = 0; i < plan.size(); ++i) {
+    bool ok = ctx.from_temporal_store;
+    for (size_t i = 0; i < plan.size() && !ok; ++i) {
         const Attempt& a = plan[i];
         const std::string memo_key = ctx.spec.id + "|" + a.label;
         if ((a.backend == Backend::CUDA && cuda_sticky_unavailable_) || (a.backend == Backend::DirectML && dml_sticky_unavailable_)) continue;
@@ -367,10 +514,7 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     auto t = Clock::now();
     const float edges = clampf(req.edges_enhancement, 0.f, 100.f);
     const float smoothing = clampf(req.subpixel_smoothing, 0.f, 100.f);
-    if (edges > 0.f) {
-        const FrameView& cf = ctx.frames[static_cast<size_t>(ctx.center)];
-        refine_edges(ctx.depth.data(), cf.rgb, cf.stride, w, h, edges, ctx.depth.data());
-    }
+    if (edges > 0.f) refine_edges(ctx.depth.data(), ctx.guide.rgb, ctx.guide.stride, w, h, edges, ctx.depth.data());
     if (smoothing > 0.f) smooth_depth(ctx.depth.data(), w, h, smoothing, ctx.depth.data());
     ctx.times.postprocess += ms_since(t);
 
@@ -388,8 +532,8 @@ dms_status Engine::compute(const dms_depth_request& req, dms_depth_result& res) 
     }
     ctx.times.postprocess += ms_since(t);
 
-    res.from_cache = 0;
-    res.backend_used = static_cast<int32_t>(ctx.used);
+    res.from_cache = ctx.from_temporal_store ? 1 : 0;
+    res.backend_used = ctx.from_temporal_store ? DMS_BACKEND_NONE : static_cast<int32_t>(ctx.used);
     res.fallback_steps = steps;
     res.raw_min = mn;
     res.raw_max = mx;

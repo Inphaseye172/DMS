@@ -547,6 +547,21 @@ dms_status DMS_API dms_smooth_depth(const float* depth, int32_t width, int32_t h
     });
 }
 
+dms_status DMS_API dms_temporal_window(dms_engine* engine, const char* model_id, int64_t frame_index, int32_t memory_optimization,
+                                       int64_t* out_start, int32_t* out_count) {
+    return guard("dms_temporal_window", [&]() -> dms_status {
+        auto e = lock_engine(engine);
+        if (!model_id || !out_start || !out_count) fail(DMS_ERR_INVALID_ARG, "NULL argument");
+        const auto m = e->manifest().find(model_id);
+        if (!m) fail(DMS_ERR_NOT_FOUND, std::string("unknown model ") + model_id);
+        const WindowSpan s = m->kind == DMS_MODEL_KIND_TEMPORAL ? temporal_window(frame_index, m->window, memory_optimization != 0)
+                                                                : WindowSpan{frame_index, 1};
+        *out_start = s.start;
+        *out_count = s.count;
+        return DMS_OK;
+    });
+}
+
 dms_status DMS_API dms_resize_f32(const float* src, int32_t sw, int32_t sh, float* dst, int32_t dw, int32_t dh) {
     return guard("dms_resize_f32", [&]() -> dms_status {
         if (!src || !dst) fail(DMS_ERR_INVALID_ARG, "NULL buffer");

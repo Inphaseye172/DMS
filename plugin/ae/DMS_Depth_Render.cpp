@@ -111,18 +111,25 @@ PF_Err smart_pre_render(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderEx
     auto pre = std::make_unique<PreRenderData>();
     pre->params = sanitize(read_params_checkout(in_data), dms_colormap_count(), gpu_is_nvidia(g.engine));
     pre->time = in_data->current_time;
-    pre->time_step = in_data->time_step;
+    pre->time_step = in_data->time_step < 0 ? -in_data->time_step : in_data->time_step;
     pre->time_scale = in_data->time_scale;
 
-    // Temporal window size (bounded). Single-frame models use exactly one checkout.
+    // Temporal window (bounded, deterministic so neighbouring frames share one inference).
+    // Single-frame models use exactly one checkout.
+    int64_t frame_index = 0, win_start = 0;
     int32_t window = 1;
-    if (model_is_temporal(pre->params.model_index) && g.engine && in_data->time_step != 0) {
-        dms_model_info mi{};
-        mi.struct_size = sizeof(mi);
-        if (dms_model_info_by_id(g.engine, model_id(pre->params.model_index), &mi) == DMS_OK) window = mi.window_size;
+    const A_long step = in_data->time_step < 0 ? -in_data->time_step : in_data->time_step;
+    if (model_is_temporal(pre->params.model_index) && g.engine && step != 0) {
+        frame_index = static_cast<int64_t>(in_data->current_time / step);
+        if (dms_temporal_window(g.engine, model_id(pre->params.model_index), frame_index, pre->params.memopt, &win_start, &window) != DMS_OK) {
+            win_start = frame_index;
+            window = 1;
+        }
         window = std::clamp(window, 1, kMaxWindow);
+    } else {
+        win_start = frame_index;
     }
-    const int32_t half = (window - 1) / 2;
+    const int32_t half = static_cast<int32_t>(std::clamp<int64_t>(frame_index - win_start, 0, window - 1));
 
     // Depth needs the whole frame: request the full layer extent, not just the output tile.
     PF_RenderRequest req = extra->input->output_request;
@@ -135,7 +142,7 @@ PF_Err smart_pre_render(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderEx
     PF_CheckoutResult center_result;
     AEFX_CLR_STRUCT(center_result);
     for (int32_t k = 0; k < window; ++k) {
-        const A_long t = in_data->current_time + static_cast<A_long>(k - half) * in_data->time_step;
+        const A_long t = window == 1 ? in_data->current_time : static_cast<A_long>((win_start + k) * step);
         PF_CheckoutResult res;
         AEFX_CLR_STRUCT(res);
         PF_Err err = extra->cb->checkout_layer(in_data->effect_ref, P_INPUT, kCheckoutBase + k, &req, t, in_data->time_step,
@@ -187,6 +194,7 @@ PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtr
     job.output_rect = pre->output_rect;
     job.time_num = pre->time;
     job.time_den = static_cast<int64_t>(pre->time_scale ? pre->time_scale : 1);
+    job.time_step = pre->time_step ? pre->time_step : 1;
     for (size_t k = 0; k < checkouts.size(); ++k) {
         PixelDepth d;
         PF_EffectWorld* w = checkouts[k]->world();

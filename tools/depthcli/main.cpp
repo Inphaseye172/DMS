@@ -38,7 +38,6 @@ struct Options {
     std::string ep = "auto";
     bool fp16 = false, memshare = false, trt = false, memopt = false;
     int offload = 0;
-    int window = 0;  // temporal window override (0 = model default)
     std::string models_dir, deps_dir, log_dir;
     int log_level = DMS_LOG_INFO;
     std::string download;
@@ -69,7 +68,7 @@ void usage() {
         "  --format png|pgm16|pfm     (slice mode always writes RGBA png)\n"
         "Backend:\n"
         "  --ep auto|cpu  --fp16  --memshare  --trt  --offload keep|ram|unload\n"
-        "  --samples 1..16  --parallel  --tiles auto|1|4|9|16  --memopt  --window N\n"
+        "  --samples 1..16  --parallel  --tiles auto|1|4|9|16  --memopt\n"
         "Misc:\n"
         "  --models-dir D --deps-dir D --log-dir D --log-level 0..3 --cache-mb N --no-cache\n"
         "  --timeout-ms N --repeat N --bench --quiet");
@@ -117,7 +116,6 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--memshare") o.memshare = true;
         else if (a == "--trt") o.trt = true;
         else if (a == "--memopt") o.memopt = true;
-        else if (a == "--window") o.window = std::atoi(next("--window"));
         else if (a == "--offload") {
             const std::string v = next("--offload");
             o.offload = v == "ram" ? DMS_OFFLOAD_TO_RAM : v == "unload" ? DMS_OFFLOAD_FULL_UNLOAD : DMS_OFFLOAD_KEEP_VRAM;
@@ -286,15 +284,15 @@ int main(int argc, char** argv) {
     int colormap = find_colormap(o.colormap);
     if (colormap < 0) { std::fprintf(stderr, "unknown colormap '%s'\n", o.colormap.c_str()); return 2; }
 
-    // Temporal window: number of frames the model consumes (from the model info), clamped by the sequence length.
-    int window = 1;
+    // Temporal models: the engine decides the (overlapping) window for each frame so that neighbouring
+    // frames share one inference; single-frame models use window = 1.
+    bool temporal = false;
     {
         dms_model_info mi{};
         mi.struct_size = sizeof(mi);
-        if (dms_model_info_by_id(eng, o.model.c_str(), &mi) == DMS_OK && mi.kind == DMS_MODEL_KIND_TEMPORAL)
-            window = o.window > 0 ? o.window : mi.window_size;
+        temporal = dms_model_info_by_id(eng, o.model.c_str(), &mi) == DMS_OK && mi.kind == DMS_MODEL_KIND_TEMPORAL;
     }
-    window = std::clamp(window, 1, static_cast<int>(files.size()));
+    const int window = temporal ? 64 : 1;  // upper bound for the image LRU below
 
     std::map<size_t, Image> loaded;  // small LRU-ish store for the sliding window
     auto get_image = [&](size_t idx) -> const Image* {
@@ -319,21 +317,28 @@ int main(int argc, char** argv) {
     int processed = 0;
     for (int rep = 0; rep < o.repeat; ++rep) {
         for (size_t fi = 0; fi < files.size(); ++fi) {
-            // Build the frame window centered on fi (clamped to the sequence).
-            const int half = (window - 1) / 2;
-            int start = static_cast<int>(fi) - half;
-            start = std::clamp(start, 0, static_cast<int>(files.size()) - window);
+            // Window for this frame (clamped to the available sequence).
+            int64_t wstart = static_cast<int64_t>(fi);
+            int32_t wcount = 1;
+            if (temporal && dms_temporal_window(eng, o.model.c_str(), static_cast<int64_t>(fi), o.memopt, &wstart, &wcount) != DMS_OK) {
+                wstart = static_cast<int64_t>(fi);
+                wcount = 1;
+            }
+            const int64_t lo = std::max<int64_t>(0, wstart);
+            const int64_t hi = std::min<int64_t>(static_cast<int64_t>(files.size()), wstart + wcount);
+            const int start = static_cast<int>(lo);
+            const int count = static_cast<int>(hi - lo);
             std::vector<dms_frame> frames;
             std::vector<const Image*> imgs;
             bool ok = true;
-            for (int k = 0; k < window; ++k) {
+            for (int k = 0; k < count; ++k) {
                 const Image* im = get_image(static_cast<size_t>(start + k));
                 if (!im) { ok = false; break; }
                 imgs.push_back(im);
             }
             if (!ok) { ++failures; continue; }
             const Image& center = *imgs[fi - static_cast<size_t>(start)];
-            for (int k = 0; k < window; ++k) {
+            for (int k = 0; k < count; ++k) {
                 if (imgs[static_cast<size_t>(k)]->width != center.width || imgs[static_cast<size_t>(k)]->height != center.height) {
                     std::fprintf(stderr, "frame size mismatch in window at %s\n", files[fi].c_str());
                     ok = false;
@@ -345,7 +350,7 @@ int main(int argc, char** argv) {
                 f.width = center.width;
                 f.height = center.height;
                 f.row_stride_floats = center.width * 3;
-                f.time_num = start + k;
+                f.time_num = start + k;  // must match cache_key.time_num for the center frame
                 f.time_den = 24;
                 frames.push_back(f);
             }
@@ -358,7 +363,7 @@ int main(int argc, char** argv) {
             rq.struct_size = sizeof(rq);
             rq.model_id = o.model.c_str();
             rq.frames = frames.data();
-            rq.frame_count = window;
+            rq.frame_count = count;
             rq.center_index = static_cast<int32_t>(fi) - start;
             rq.base_resolution = o.base_res;
             rq.edges_enhancement = o.edges;
@@ -374,7 +379,14 @@ int main(int argc, char** argv) {
             rq.backend.memory_optimization = o.memopt;
             rq.backend.use_tensorrt = o.trt;
             rq.cache_key.struct_size = sizeof(rq.cache_key);
-            rq.cache_key.layer_hash = o.no_cache ? 0 : std::hash<std::string>{}(files[fi]) | 1u;
+            // Cache identity: the file for single-frame models; the whole window for temporal models (so all
+            // frames of a window share one inference through the engine's temporal store).
+            uint64_t ident = std::hash<std::string>{}(files[fi]);
+            if (temporal) {
+                ident = 1469598103934665603ull;
+                for (int k = 0; k < count; ++k) ident = (ident ^ std::hash<std::string>{}(files[static_cast<size_t>(start + k)])) * 1099511628211ull;
+            }
+            rq.cache_key.layer_hash = o.no_cache ? 0 : (ident | 1u);
             rq.cache_key.time_num = static_cast<int64_t>(fi);
             rq.cache_key.time_den = 24;
             rq.timeout_ms = o.timeout_ms;

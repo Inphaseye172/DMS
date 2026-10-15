@@ -22,8 +22,9 @@ struct RenderJob {
     Rect input_rect;   // layer-space rect covered by frames[*] pixel (0,0)..(w,h)
     Rect output_rect;  // layer-space rect covered by the output world
     WorldView output;
-    int64_t time_num = 0;
+    int64_t time_num = 0;   // host time of the center frame
     int64_t time_den = 1;
+    int64_t time_step = 1;  // host time between frames (frames[k] is at time_num + (k - center_index) * time_step)
     uint8_t instance_guid[16] = {0};
     dms_abort_fn abort_fn = nullptr;
     dms_progress_fn progress_fn = nullptr;

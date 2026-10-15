@@ -10,6 +10,7 @@
 #include "inference_service.h"
 #include "logging.h"
 #include "manifest.h"
+#include "temporal.h"
 
 #include <atomic>
 #include <chrono>
@@ -94,6 +95,8 @@ private:
     std::unique_ptr<InferenceService> inference_;
     FrameCache cache_;
     InstanceRegistry instances_;
+    PlaneStore temporal_store_{512ull << 20};  // per-frame window results (pre post-processing)
+    PlaneStore anchors_{128ull << 20};         // aligned small planes for cross-window alignment
     std::mutex verified_mu_;
     std::set<std::string> verified_;
 
