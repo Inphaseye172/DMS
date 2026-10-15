@@ -32,7 +32,34 @@ Each configuration ran in one depthcli process with the cache disabled, so every
 
 27 of 27 runs passed. The DA2-small 16-tile runs took 583–600 s on this 4-vCPU CPU-only machine, right at the 600 s limit. That is CPU throughput (17 inferences per frame), not a hang. On a GPU these runs are expected to be far faster, but that was not measured.
 
-## Not run (needs Windows / an NVIDIA GPU / After Effects)
+## Windows run on the developer's machine (2026-10-15, `scripts/setup-windows.ps1`)
+
+Machine: Windows 10 Pro 19045, Visual Studio Community 2026 18.11 (CMake 4.3.1, generator "Visual Studio 18 2026"),
+Windows SDK 10.0.26100, NVIDIA GeForce RTX 3080 10 GB with driver 591.44, After Effects 2026, After Effects SDK 26.5.
+
+| Check | Result |
+|---|---|
+| Runtime dependencies fetched; every DLL import resolves | OK |
+| `DMS_Depth.aex` built against the real AE SDK 26.5 (`/W4 /WX`, static CRT) | OK, 0.8 MB, no errors and no warnings |
+| Unit tests (MSVC build) | 99/99 pass |
+| Engine device report | CUDA available, ONNX Runtime 1.22.0 (CUDA build loaded; DirectML is the fallback build for non-NVIDIA GPUs) |
+| DA2-small model download through WinHTTP (SHA-256 verified) | OK |
+| Inference with hardware acceleration, 640×360, 6 frames, cache off | **CUDA** backend, average 171.7 ms (includes the first frame's session creation), no fallbacks |
+| Same on the CPU | average 486.9 ms |
+| 4K (3840×2160), 4 tiles, edges + smoothing, Turbo colormap | CUDA, 1582 ms, no fallbacks |
+| Install into After Effects 2026 (elevated) | OK |
+
+Known issue from this run: on a re-run, `fetch-deps.ps1` re-hashed and re-extracted every archive silently, which looked
+like a hang. This is fixed: re-runs now finish in about a second and show progress.
+
+## Not run yet
+
+- Loading the plug-in in After Effects 2026 and the UI checklist in `docs/BUILD_WINDOWS.md` (in progress).
+- `tests/stress/aerender_stress.ps1`.
+- DirectML and TensorRT backends, CUDA Memory Sharing, the GPU render path (`SMART_RENDER_GPU`).
+- Depth Anything v3 and the video model (no download source configured yet).
+
+## Originally not run (needs Windows / an NVIDIA GPU / After Effects)
 
 - Building `DMS_Depth.aex` with MSVC against the real AE SDK, including PiPL compilation.
 - Loading the plugin in After Effects 2026, the Effect Controls UI (show/hide, Options dialog, download dialog), and MFR rendering.
