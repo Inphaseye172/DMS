@@ -7,6 +7,7 @@
 #include "AE_EffectCB.h"
 #include "AE_EffectCBSuites.h"
 #include "AE_EffectSuites.h"
+#include "AE_EffectGPUSuites.h"
 #include "AE_GeneralPlug.h"
 #include "AE_Macros.h"
 #include "AEFX_SuiteHelper.h"

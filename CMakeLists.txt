@@ -41,3 +41,15 @@ if(DMS_BUILD_PLUGIN)
   endif()
   add_subdirectory(plugin)
 endif()
+
+# Compile-only check of the AE glue against tools/ae_sdk_mock (Linux/CI). Not a plugin build.
+option(DMS_AE_GLUE_CHECK "Compile plugin/ae against the AE SDK mock (no linking) when the real plugin is not built" ON)
+if(DMS_AE_GLUE_CHECK AND NOT DMS_BUILD_PLUGIN)
+  add_library(dms_ae_glue_check OBJECT
+    plugin/ae/DMS_Depth.cpp plugin/ae/DMS_Depth_Params.cpp plugin/ae/DMS_Depth_Render.cpp
+    plugin/ae/DMS_Depth_Dialog.cpp plugin/ae/DMS_Depth_GPU.cpp)
+  target_include_directories(dms_ae_glue_check PRIVATE plugin/ae)
+  target_include_directories(dms_ae_glue_check SYSTEM PRIVATE tools/ae_sdk_mock)
+  target_link_libraries(dms_ae_glue_check PRIVATE dms_plugin_core dms_engine)
+  dms_apply_warnings(dms_ae_glue_check)
+endif()

@@ -10,12 +10,16 @@
 
 namespace dms_plugin {
 
-enum class PixelDepth : int { U8 = 8, U16 = 16, F32 = 32 };
+// F32_BGRA = PF_PixelFormat_GPU_BGRA128 (GPU worlds copied to host memory): float B,G,R,A.
+enum class PixelDepth : int { U8 = 8, U16 = 16, F32 = 32, F32_BGRA = 33 };
 
 struct Pixel8 { uint8_t a, r, g, b; };
 struct Pixel16 { uint16_t a, r, g, b; };
 struct PixelF { float a, r, g, b; };
-static_assert(sizeof(Pixel8) == 4 && sizeof(Pixel16) == 8 && sizeof(PixelF) == 16, "AE pixel layouts");
+struct PixelBGRA { float b, g, r, a; };
+static_assert(sizeof(Pixel8) == 4 && sizeof(Pixel16) == 8 && sizeof(PixelF) == 16 && sizeof(PixelBGRA) == 16, "AE pixel layouts");
+
+constexpr ptrdiff_t bytes_per_pixel(PixelDepth d) noexcept { return d == PixelDepth::U8 ? 4 : d == PixelDepth::U16 ? 8 : 16; }
 
 constexpr float kMax8 = 255.f;
 constexpr float kMax16 = 32768.f;
@@ -29,8 +33,7 @@ struct WorldView {
 
     bool valid() const noexcept {
         if (!data || width <= 0 || height <= 0) return false;
-        const ptrdiff_t px = depth == PixelDepth::U8 ? 4 : depth == PixelDepth::U16 ? 8 : 16;
-        return rowbytes >= px * width;
+        return rowbytes >= bytes_per_pixel(depth) * width;
     }
     uint8_t* row(int32_t y) const noexcept { return static_cast<uint8_t*>(data) + static_cast<ptrdiff_t>(y) * rowbytes; }
 };

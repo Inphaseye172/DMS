@@ -8,6 +8,7 @@
 #include "DMS_Depth.h"
 
 #include "ae_raii.h"
+#include "pixels.h"
 
 #include <algorithm>
 #include <cmath>
@@ -160,18 +161,22 @@ PF_Err smart_pre_render(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderEx
     extra->output->result_rect = to_lrect(out_rect);
     extra->output->max_result_rect = center_result.max_result_rect;
     extra->output->solid = FALSE;
+    // GPU rendering is possible only for frameworks we accepted in GPU_DEVICE_SETUP (CUDA).
+    if (extra->input->what_gpu != PF_GPU_Framework_NONE && gpu_framework_supported(extra->input->what_gpu))
+        extra->output->flags |= PF_RenderOutputFlag_GPU_RENDER_POSSIBLE;
     extra->output->pre_render_data = pre.release();  // host owns it now
     extra->output->delete_pre_render_data_func = DeletePreRenderData;
     return PF_Err_NONE;
 }
 
-PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra) {
+PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra, bool gpu, const WorldAcquire& acquire,
+                           const OutputCommit& commit) {
     if (!extra || !extra->input || !extra->cb) return PF_Err_BAD_CALLBACK_PARAM;
     const auto* pre = static_cast<const PreRenderData*>(extra->input->pre_render_data);
     if (!pre || pre->magic != kPreRenderMagic) return PF_Err_BAD_CALLBACK_PARAM;
     const GlobalData g = read_global(in_data);
 
-    // Check out every frame requested in pre-render; RAII checks each one back in.
+    // Check out every frame requested in pre-render; RAII checks each one back in on every path.
     std::vector<std::unique_ptr<SmartLayerCheckout>> checkouts;
     checkouts.reserve(static_cast<size_t>(pre->frame_count));
     for (int32_t k = 0; k < pre->frame_count; ++k)
@@ -182,24 +187,35 @@ PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtr
     if (err) return err;
     if (!output) return PF_Err_NONE;  // nothing to render (empty result rect)
 
-    PixelDepth out_depth;
-    if (!pixel_depth_of(in_data, output, out_depth)) {
-        report_message(in_data, out_data, "DMS: unsupported output pixel format");
-        return PF_Err_NONE;
-    }
     RenderJob job;
+    std::vector<uint8_t> host_out;  // GPU path: host staging for the output world
+    if (gpu) {
+        if (output->width <= 0 || output->height <= 0 || output->rowbytes < output->width * static_cast<A_long>(sizeof(PixelBGRA)))
+            return PF_Err_NONE;
+        host_out.assign(static_cast<size_t>(output->rowbytes) * static_cast<size_t>(output->height), 0);
+        job.output.data = host_out.data();
+        job.output.width = output->width;
+        job.output.height = output->height;
+        job.output.rowbytes = output->rowbytes;
+        job.output.depth = PixelDepth::F32_BGRA;
+    } else {
+        PixelDepth out_depth;
+        if (!pixel_depth_of(in_data, output, out_depth)) {
+            report_message(in_data, out_data, "DMS: unsupported output pixel format");
+            return PF_Err_NONE;
+        }
+        job.output = view_of(output, out_depth);
+    }
     job.params = pre->params;
-    job.output = view_of(output, out_depth);
     job.input_rect = pre->input_rect;
     job.output_rect = pre->output_rect;
     job.time_num = pre->time;
     job.time_den = static_cast<int64_t>(pre->time_scale ? pre->time_scale : 1);
     job.time_step = pre->time_step ? pre->time_step : 1;
     for (size_t k = 0; k < checkouts.size(); ++k) {
-        PixelDepth d;
-        PF_EffectWorld* w = checkouts[k]->world();
-        if (w && pixel_depth_of(in_data, w, d)) job.frames.push_back(view_of(w, d));
-        else job.frames.push_back(WorldView{});  // missing neighbor (outside layer time): render core drops it
+        WorldView v;
+        if (!acquire(checkouts[k]->world(), v)) v = WorldView{};  // missing neighbour: render core drops it
+        job.frames.push_back(v);
     }
     job.center_index = std::clamp(pre->center_index, 0, static_cast<int32_t>(job.frames.size()) - 1);
     read_sequence_guid(in_data, job.instance_guid);
@@ -207,12 +223,33 @@ PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtr
     job.progress_fn = progress_cb;
     job.callback_user = in_data;
 
+    RenderOutcome outcome;
     if (!g.engine) {
         fill_world(job.output, 0.5f, 1.f);
-        report_message(in_data, out_data, "DMS: engine failed to initialize - see log in %LOCALAPPDATA%\\DMS\\logs");
-        return PF_Err_NONE;
+        outcome.status = DMS_ERR_DEGRADED;
+        outcome.output_written = true;
+        outcome.report_to_user = true;
+        outcome.message = "DMS: engine failed to initialize - see the log in %LOCALAPPDATA%\\DMS\\logs";
+    } else {
+        outcome = render(g.engine, job);
     }
-    return finish(in_data, out_data, render(g.engine, job));
+    if (outcome.status != DMS_ERR_ABORTED && !commit(output, job.output)) {
+        log_line(in_data, DMS_LOG_ERROR, "failed to publish the output world (GPU upload)");
+        return PF_Err_INTERNAL_STRUCT_DAMAGED;
+    }
+    return finish(in_data, out_data, outcome);
+}
+
+PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra) {
+    return smart_render_common(
+        in_data, out_data, extra, /*gpu=*/false,
+        [in_data](PF_EffectWorld* w, WorldView& v) {
+            PixelDepth d;
+            if (!w || !pixel_depth_of(in_data, w, d)) return false;
+            v = view_of(w, d);
+            return true;
+        },
+        [](PF_EffectWorld*, const WorldView&) { return true; });
 }
 
 PF_Err legacy_render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[], PF_LayerDef* output) {

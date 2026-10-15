@@ -9,9 +9,13 @@
 
 #include "dms/engine.h"
 
+#include <functional>
 #include <string>
 
 namespace dms_ae {
+
+// in_data->appl_id of Premiere Pro ('PrMr'), spelled out to avoid multi-character literals.
+constexpr A_long kPremiereApplId = (static_cast<A_long>('P') << 24) | (static_cast<A_long>('r') << 16) | (static_cast<A_long>('M') << 8) | 'r';
 
 // Global data (PF_OutData::global_data). Written once in GLOBAL_SETUP, read-only afterwards (MFR safe).
 struct GlobalData {
@@ -43,6 +47,18 @@ bool gpu_is_nvidia(dms_engine* engine) noexcept;
 PF_Err smart_pre_render(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderExtra* extra);
 PF_Err smart_render(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra);
 PF_Err legacy_render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[], PF_LayerDef* output);
+// Shared SmartFX render: `acquire` turns a checked-out world into a host-readable view (CPU: direct;
+// GPU: download), `commit` publishes the host output (CPU: no-op; GPU: upload).
+using WorldAcquire = std::function<bool(PF_EffectWorld*, dms_plugin::WorldView&)>;
+using OutputCommit = std::function<bool(PF_EffectWorld*, const dms_plugin::WorldView&)>;
+PF_Err smart_render_common(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra, bool gpu, const WorldAcquire& acquire,
+                           const OutputCommit& commit);
+
+// GPU (DMS_Depth_GPU.cpp)
+bool gpu_framework_supported(PF_GPU_Framework fw) noexcept;
+PF_Err gpu_device_setup(PF_InData* in_data, PF_OutData* out_data, PF_GPUDeviceSetupExtra* extra);
+PF_Err gpu_device_setdown(PF_InData* in_data, PF_OutData* out_data, PF_GPUDeviceSetdownExtra* extra);
+PF_Err smart_render_gpu(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra);
 
 // Dialogs (DMS_Depth_Dialog.cpp) — UI thread only, never called from render.
 PF_Err do_options_dialog(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* params[]);

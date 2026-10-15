@@ -12,7 +12,7 @@ struct FakeWorld {
     std::vector<uint8_t> buf;
     dms_plugin::WorldView view;
     FakeWorld(int w, int h, dms_plugin::PixelDepth d, int pad_bytes = 12) {
-        const int px = d == dms_plugin::PixelDepth::U8 ? 4 : d == dms_plugin::PixelDepth::U16 ? 8 : 16;
+        const int px = static_cast<int>(dms_plugin::bytes_per_pixel(d));
         view.width = w;
         view.height = h;
         view.depth = d;
@@ -33,6 +33,7 @@ struct FakeWorld {
                                                       static_cast<uint16_t>(g * 32768.f + .5f), static_cast<uint16_t>(b * 32768.f + .5f)};
                 break;
             case PixelDepth::F32: reinterpret_cast<PixelF*>(row)[x] = {a, r, g, b}; break;
+            case PixelDepth::F32_BGRA: reinterpret_cast<PixelBGRA*>(row)[x] = {b, g, r, a}; break;
         }
     }
     void get(int x, int y, float& a, float& r, float& g, float& b) const {
@@ -42,11 +43,12 @@ struct FakeWorld {
             case PixelDepth::U8: { auto p = reinterpret_cast<const Pixel8*>(row)[x]; a = p.a / 255.f; r = p.r / 255.f; g = p.g / 255.f; b = p.b / 255.f; break; }
             case PixelDepth::U16: { auto p = reinterpret_cast<const Pixel16*>(row)[x]; a = p.a / 32768.f; r = p.r / 32768.f; g = p.g / 32768.f; b = p.b / 32768.f; break; }
             case PixelDepth::F32: { auto p = reinterpret_cast<const PixelF*>(row)[x]; a = p.a; r = p.r; g = p.g; b = p.b; break; }
+            case PixelDepth::F32_BGRA: { auto p = reinterpret_cast<const PixelBGRA*>(row)[x]; a = p.a; r = p.r; g = p.g; b = p.b; break; }
         }
     }
     // True if the row padding bytes are untouched (0xCD).
     bool padding_intact() const {
-        const int px = view.depth == dms_plugin::PixelDepth::U8 ? 4 : view.depth == dms_plugin::PixelDepth::U16 ? 8 : 16;
+        const int px = static_cast<int>(dms_plugin::bytes_per_pixel(view.depth));
         for (int y = 0; y < view.height; ++y)
             for (ptrdiff_t i = px * view.width; i < view.rowbytes; ++i)
                 if (buf[static_cast<size_t>(y) * static_cast<size_t>(view.rowbytes) + static_cast<size_t>(i)] != 0xCD) return false;

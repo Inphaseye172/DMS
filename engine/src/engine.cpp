@@ -195,6 +195,15 @@ std::shared_ptr<Engine> lock_engine(dms_engine* h) {
 
 using namespace dms;
 
+namespace {
+InstanceRegistry::Guid to_guid(const uint8_t* g) {
+    if (!g) fail(DMS_ERR_INVALID_ARG, "guid is NULL");
+    InstanceRegistry::Guid out{};
+    std::memcpy(out.data(), g, 16);
+    return out;
+}
+}  // namespace
+
 extern "C" {
 
 dms_status DMS_API dms_engine_acquire(const dms_engine_config* config, dms_engine** out_engine) {
@@ -405,15 +414,6 @@ dms_status DMS_API dms_device_query(dms_engine* engine, dms_device_info* out_inf
         return DMS_OK;
     });
 }
-
-namespace {
-InstanceRegistry::Guid to_guid(const uint8_t* g) {
-    if (!g) fail(DMS_ERR_INVALID_ARG, "guid is NULL");
-    InstanceRegistry::Guid out{};
-    std::memcpy(out.data(), g, 16);
-    return out;
-}
-}  // namespace
 
 dms_status DMS_API dms_depth_cache_lookup(dms_engine* engine, const dms_cache_key* key, const char* model_id, int32_t base_resolution,
                                           const dms_backend_settings* backend, float edges, float smoothing, dms_depth_result* result) {

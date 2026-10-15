@@ -181,7 +181,7 @@ TEST_P(PixelDepthTest, ZeroSizeInputYieldsTransparentOutput) {
     EXPECT_TRUE(out.padding_intact());
 }
 
-INSTANTIATE_TEST_SUITE_P(AllDepths, PixelDepthTest, ::testing::Values(PixelDepth::U8, PixelDepth::U16, PixelDepth::F32));
+INSTANTIATE_TEST_SUITE_P(AllDepths, PixelDepthTest, ::testing::Values(PixelDepth::U8, PixelDepth::U16, PixelDepth::F32, PixelDepth::F32_BGRA));
 
 TEST(PluginCore, OutputOutsideInputIsTransparent) {
     dms_test::EngineHandle eh("render_core_outside");

@@ -20,7 +20,8 @@ static_assert(DMS_PIPL_OUTFLAGS ==
 static_assert(DMS_PIPL_OUTFLAGS2 ==
                   (PF_OutFlag2_SUPPORTS_QUERY_DYNAMIC_FLAGS | PF_OutFlag2_PARAM_GROUP_START_COLLAPSED_FLAG |
                    PF_OutFlag2_SUPPORTS_SMART_RENDER | PF_OutFlag2_FLOAT_COLOR_AWARE |
-                   PF_OutFlag2_SUPPORTS_GET_FLATTENED_SEQUENCE_DATA | PF_OutFlag2_SUPPORTS_THREADED_RENDERING),
+                   PF_OutFlag2_SUPPORTS_GET_FLATTENED_SEQUENCE_DATA | PF_OutFlag2_SUPPORTS_THREADED_RENDERING |
+                   PF_OutFlag2_SUPPORTS_GPU_RENDER_F32),
               "PiPL outflags2 out of sync with GLOBAL_SETUP");
 static_assert(DMS_PIPL_EFFECT_VERSION ==
                   PF_VERSION(DMS_MAJOR_VERSION, DMS_MINOR_VERSION, DMS_BUG_VERSION, DMS_STAGE_VERSION, DMS_BUILD_VERSION),
@@ -97,7 +98,7 @@ PF_Err global_setup(PF_InData* in_data, PF_OutData* out_data) {
     if (!h.allocate(sizeof(GlobalData))) return PF_Err_OUT_OF_MEMORY;
     GlobalData g{};
     g.magic = kGlobalMagic;
-    g.is_premiere = in_data->appl_id == 'PrMr' ? 1 : 0;
+    g.is_premiere = in_data->appl_id == kPremiereApplId ? 1 : 0;
     if (!g.is_premiere) {
         AEFX_SuiteScoper<DmsUtilitySuite> util(in_data, DMS_UTILITY_SUITE, out_data);
         if (util->AEGP_RegisterWithAEGP(nullptr, DMS_EFFECT_NAME, &g.plugin_id) != A_Err_NONE) g.plugin_id = 0;
@@ -259,6 +260,9 @@ PF_Err dispatch(PF_Cmd cmd, PF_InData* in_data, PF_OutData* out_data, PF_ParamDe
         case PF_Cmd_QUERY_DYNAMIC_FLAGS: return query_dynamic_flags(in_data, out_data);
         case PF_Cmd_SMART_PRE_RENDER: return smart_pre_render(in_data, out_data, static_cast<PF_PreRenderExtra*>(extra));
         case PF_Cmd_SMART_RENDER: return smart_render(in_data, out_data, static_cast<PF_SmartRenderExtra*>(extra));
+        case PF_Cmd_SMART_RENDER_GPU: return smart_render_gpu(in_data, out_data, static_cast<PF_SmartRenderExtra*>(extra));
+        case PF_Cmd_GPU_DEVICE_SETUP: return gpu_device_setup(in_data, out_data, static_cast<PF_GPUDeviceSetupExtra*>(extra));
+        case PF_Cmd_GPU_DEVICE_SETDOWN: return gpu_device_setdown(in_data, out_data, static_cast<PF_GPUDeviceSetdownExtra*>(extra));
         case PF_Cmd_RENDER: return legacy_render(in_data, out_data, params, output);
         default: return PF_Err_NONE;
     }

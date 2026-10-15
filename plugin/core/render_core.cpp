@@ -39,6 +39,11 @@ inline void put(uint8_t* row, int32_t x, PixelDepth depth, float a, float r, flo
             reinterpret_cast<PixelF*>(row)[x] = {clamp01(a), f(r), f(g), f(b)};
             break;
         }
+        case PixelDepth::F32_BGRA: {
+            auto f = [raw_float](float v) { return std::isfinite(v) ? (raw_float ? v : clamp01(v)) : 0.f; };
+            reinterpret_cast<PixelBGRA*>(row)[x] = {f(b), f(g), f(r), clamp01(a)};
+            break;
+        }
     }
 }
 
@@ -90,6 +95,7 @@ void write_output(const RenderJob& job, const std::vector<float>& mapped, const 
                 switch (src.depth) {
                     case PixelDepth::U8: read_src<Pixel8>(srow, dx, src_scale, sa, r, g, b); break;
                     case PixelDepth::U16: read_src<Pixel16>(srow, dx, src_scale, sa, r, g, b); break;
+                    case PixelDepth::F32_BGRA: read_src<PixelBGRA>(srow, dx, src_scale, sa, r, g, b); break;
                     default: read_src<PixelF>(srow, dx, src_scale, sa, r, g, b); break;
                 }
                 put(orow, ox, out.depth, sa * (*slice_mask)[i], r, g, b, true);

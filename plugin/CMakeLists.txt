@@ -8,6 +8,7 @@ add_library(DMS_Depth MODULE
   ae/DMS_Depth_Params.cpp
   ae/DMS_Depth_Render.cpp
   ae/DMS_Depth_Dialog.cpp
+  ae/DMS_Depth_GPU.cpp
   ae/DMS_Depth_extra.rc
   "${DMS_PIPL_RC}"
   ${AE_SDK_UTIL_SOURCES})

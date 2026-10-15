@@ -49,6 +49,7 @@ bool world_to_rgb(const WorldView& w, std::vector<float>& rgb, std::vector<float
         case PixelDepth::U8: convert<Pixel8>(w, 1.f / kMax8, rgb.data(), ap); break;
         case PixelDepth::U16: convert<Pixel16>(w, 1.f / kMax16, rgb.data(), ap); break;
         case PixelDepth::F32: convert<PixelF>(w, 1.f, rgb.data(), ap); break;
+        case PixelDepth::F32_BGRA: convert<PixelBGRA>(w, 1.f, rgb.data(), ap); break;
         default: return false;
     }
     return true;
@@ -80,7 +81,7 @@ void resize_rgb(const std::vector<float>& src, int sw, int sh, std::vector<float
 
 uint64_t hash_world(const WorldView& w) noexcept {
     if (!w.valid()) return 0;
-    const size_t px = w.depth == PixelDepth::U8 ? 4 : w.depth == PixelDepth::U16 ? 8 : 16;
+    const size_t px = static_cast<size_t>(bytes_per_pixel(w.depth));
     const size_t row_bytes = px * static_cast<size_t>(w.width);
     uint64_t h = mix(0x84222325cbf29ce4ull, (static_cast<uint64_t>(w.width) << 32) | static_cast<uint32_t>(w.height));
     h = mix(h, static_cast<uint64_t>(w.depth));
@@ -120,6 +121,7 @@ void fill_world(const WorldView& out, float value, float alpha) noexcept {
                     break;
                 }
                 case PixelDepth::F32: reinterpret_cast<PixelF*>(row)[x] = {alpha, value, value, value}; break;
+                case PixelDepth::F32_BGRA: reinterpret_cast<PixelBGRA*>(row)[x] = {value, value, value, alpha}; break;
             }
         }
     }
